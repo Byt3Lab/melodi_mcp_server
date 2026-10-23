@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "melodi-mcp-server"
+version = "0.1.0"
+description = "Serveur MCP indépendant pour MELODI ERP avec catalogue dynamique et console d'administration"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "byt3lab", email = "contact@byt3lab.com" }
+]
+dependencies = [
+    "mcp>=1.2.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "starlette>=0.27.0",
+    "uvicorn>=0.30.0",
+    "jsonschema>=4.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "respx>=0.21.0",
+]
+
+[project.scripts]
+melodi-mcp-server = "melodi_mcp_server.main:run_cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/melodi_mcp_server"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
