@@ -59,6 +59,7 @@ class MelodiAsyncClient:
         api_key = self.settings.melodi_api_key.get_secret_value()
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+            headers["X-Internal-MCP-Key"] = api_key
             headers["X-Melodi-Service-Token"] = api_key
 
         if user_id:
@@ -146,6 +147,32 @@ class MelodiAsyncClient:
                     details={"url": url, "raw": response.text[:200]},
                 )
 
+            # Vérification si MELODI a répondu avec success: false (même sous HTTP 200)
+            if isinstance(data, dict) and data.get("success") is False:
+                err_info = data.get("error", {})
+                err_code = err_info.get("code") if isinstance(err_info, dict) else "UNKNOWN_ERROR"
+                err_msg = err_info.get("message", "Erreur renvoyée par MELODI") if isinstance(err_info, dict) else str(err_info)
+                if err_code in ("AUTHENTICATION_REQUIRED", "UNAUTHORIZED"):
+                    raise MelodiAuthenticationError(
+                        f"Authentification refusée par MELODI : {err_msg}",
+                        details={"url": url, "correlation_id": cid, "data": data},
+                    )
+                elif err_code in ("PERMISSION_DENIED", "FORBIDDEN"):
+                    raise MelodiAuthorizationError(
+                        f"Droits insuffisants (MELODI) : {err_msg}",
+                        details={"url": url, "correlation_id": cid, "data": data},
+                    )
+                elif err_code == "TOOL_NOT_FOUND":
+                    raise ToolNotFoundError(
+                        f"Outil introuvable (MELODI) : {err_msg}",
+                        details={"url": url, "correlation_id": cid, "data": data},
+                    )
+                else:
+                    raise ToolExecutionError(
+                        f"Erreur MELODI [{err_code}] : {err_msg}",
+                        details={"url": url, "correlation_id": cid, "data": data},
+                    )
+
             return data
 
         except httpx.TimeoutException as e:
@@ -189,8 +216,12 @@ class MelodiAsyncClient:
         call_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Transmet l'exécution d'un outil à MELODI."""
+        confirmed = bool(arguments.get("_confirmed", arguments.get("confirmed", False)))
         payload = {
+            "tool_name": tool_name,
             "call_id": call_id or str(uuid.uuid4()),
+            "correlation_id": correlation_id or call_id or str(uuid.uuid4()),
+            "confirmed": confirmed,
             "arguments": arguments,
             "context": {
                 "client": "melodi_mcp_server",

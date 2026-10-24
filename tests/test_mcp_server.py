@@ -10,7 +10,7 @@ from melodi_mcp_server.settings import Settings
 @respx.mock
 async def test_20_mcp_server_initialization_and_transports(mock_settings, sample_catalog_payload):
     """Test 20: Comportement et initialisation du transport configuré."""
-    respx.get("http://test-melodi:8000/internal/mcp/tools").respond(
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/tools").respond(
         status_code=200,
         json=sample_catalog_payload,
     )

@@ -17,7 +17,7 @@ def mock_settings() -> Settings:
     """Paramètres isolés pour les tests."""
     s = Settings(
         melodi_base_url="http://test-melodi:8000",
-        melodi_api_prefix="/internal/mcp",
+        melodi_api_prefix="/api/melodi_mcp/internal",
         melodi_api_key=SecretStr("super_secret_test_token_12345"),
         melodi_timeout_seconds=2.0,
         mcp_transport="stdio",

@@ -1,6 +1,6 @@
 """Template HTML / CSS / JS embarqué autonome pour la console d'administration."""
 
-DASHBOARD_HTML = """<!DOCTYPE html>
+DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
@@ -175,6 +175,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <script>
         let cachedTools = [];
 
+        function getAuthHeaders() {
+            const params = new URLSearchParams(window.location.search);
+            const key = params.get('api_key') || localStorage.getItem('admin_api_key') || 'admin';
+            return { 'Authorization': 'Bearer ' + key };
+        }
+
         function showToast(message, isError = false) {
             const toast = document.getElementById('toast');
             toast.textContent = message;
@@ -184,7 +190,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         async function fetchStatus() {
             try {
-                const res = await fetch(window.location.pathname.replace(/\\/$/, '') + '/api/status');
+                const res = await fetch(window.location.pathname.replace(/\/$/, '') + '/api/status', {
+                    headers: getAuthHeaders(),
+                    credentials: 'same-origin'
+                });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 updateUI(data);
@@ -198,7 +207,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         async function fetchTools() {
             try {
-                const res = await fetch(window.location.pathname.replace(/\\/$/, '') + '/api/tools');
+                const res = await fetch(window.location.pathname.replace(/\/$/, '') + '/api/tools', {
+                    headers: getAuthHeaders(),
+                    credentials: 'same-origin'
+                });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 cachedTools = data.tools || [];
@@ -273,7 +285,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         function viewSchema(idx) {
             const tool = cachedTools[idx];
             if (!tool) return;
-            document.getElementById('modal-tool-name').textContent = 'Schéma d\\'entrée : ' + tool.name;
+            document.getElementById('modal-tool-name').textContent = "Schéma d'entrée : " + tool.name;
             document.getElementById('modal-schema-content').textContent = JSON.stringify(tool.input_schema, null, 2);
             document.getElementById('schema-modal').classList.add('active');
         }
@@ -305,7 +317,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             btn.disabled = true;
             btn.textContent = '⏳ Synchronisation...';
             try {
-                const res = await fetch(window.location.pathname.replace(/\\/$/, '') + '/api/sync', { method: 'POST' });
+                const res = await fetch(window.location.pathname.replace(/\/$/, '') + '/api/sync', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    credentials: 'same-origin'
+                });
                 const data = await res.json();
                 if (res.ok && data.success) {
                     showToast('Catalogue synchronisé : ' + data.tools_count + ' outils enregistrés');
@@ -330,6 +346,70 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 fetchStatus();
             }
         }, 5000);
+    </script>
+</body>
+</html>
+"""
+
+LOGIN_HTML = r"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MELODI MCP Server - Authentification</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --danger: #ef4444;
+            --radius: 8px;
+            --font: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: 100%; max-width: 400px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; }
+        .logo { font-size: 1.5rem; font-weight: 700; margin-bottom: 8px; }
+        .subtitle { font-size: 0.9rem; color: var(--text-muted); margin-bottom: 24px; }
+        .form-group { text-align: left; margin-bottom: 20px; }
+        label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; color: var(--text); }
+        input[type="password"] { width: 100%; padding: 10px 14px; background: #0f172a; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-size: 0.95rem; outline: none; }
+        input[type="password"]:focus { border-color: var(--primary); }
+        .btn { width: 100%; background: var(--primary); color: white; border: none; padding: 12px; border-radius: var(--radius); font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+        .btn:hover { background: var(--primary-hover); }
+        .hint { font-size: 0.8rem; color: var(--text-muted); margin-top: 16px; }
+        .code { font-family: monospace; background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; color: #38bdf8; }
+        .error { color: var(--danger); font-size: 0.85rem; margin-top: 10px; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="logo">⚡ MELODI MCP Server</div>
+        <div class="subtitle">Console d'Administration</div>
+        <form onsubmit="handleLogin(event)">
+            <div class="form-group">
+                <label for="key-input">Clé d'administration</label>
+                <input type="password" id="key-input" value="admin" placeholder="Entrez la clé..." required autofocus>
+                <div id="error-msg" class="error">Clé invalide ou refusée</div>
+            </div>
+            <button type="submit" class="btn">Se connecter</button>
+        </form>
+        <div class="hint">Clé par défaut : <span class="code">admin</span></div>
+    </div>
+    <script>
+        function handleLogin(e) {
+            e.preventDefault();
+            const key = document.getElementById('key-input').value.trim();
+            if (!key) return;
+            localStorage.setItem('admin_api_key', key);
+            document.cookie = 'admin_api_key=' + encodeURIComponent(key) + '; path=/; SameSite=Lax';
+            const targetUrl = window.location.pathname.replace(/\/$/, '') + '?api_key=' + encodeURIComponent(key);
+            window.location.href = targetUrl;
+        }
     </script>
 </body>
 </html>

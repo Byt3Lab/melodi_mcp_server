@@ -46,10 +46,10 @@ Cette application agit comme une passerelle d'adaptation sécurisée et dynamiqu
                     │  HTTP/REST sécurisé (Bearer / Correlation ID)
 ┌───────────────────▼───────────────────┐
 │          MELODI ERP (melodi_mcp)      │
-│  - /internal/mcp/health               │
-│  - /internal/mcp/manifest             │
-│  - /internal/mcp/tools                │
-│  - /internal/mcp/tools/{tool}/execute │
+│  - /api/melodi_mcp/internal/health    │
+│  - /api/melodi_mcp/internal/manifest  │
+│  - /api/melodi_mcp/internal/tools     │
+│  - /api/melodi_mcp/internal/tools/... │
 └───────────────────────────────────────┘
 ```
 
@@ -57,7 +57,7 @@ Cette application agit comme une passerelle d'adaptation sécurisée et dynamiqu
 
 ## 2. Spécification du Contrat Interne MELODI (v1)
 
-Le serveur communique avec l'instance MELODI ERP via une API REST sécurisée. Le préfixe d'accès (`MELODI_API_PREFIX`) est **configurable** (par défaut `/internal/mcp`, mais peut être configuré par exemple sur `/api/v1/mcp` ou `/mcp`).
+Le serveur communique avec l'instance MELODI ERP via une API REST sécurisée. Le préfixe d'accès (`MELODI_API_PREFIX`) est **configurable** (par défaut `/api/melodi_mcp/internal`, mais peut être configuré par exemple sur `/internal/mcp` ou `/api/v1/mcp`).
 
 ### En-têtes obligatoires & contextuels
 - `Authorization: Bearer <MELODI_API_KEY>` (ou `X-Melodi-Service-Token: <TOKEN>`)
@@ -109,7 +109,7 @@ cp .env.example .env
 | Variable | Défaut | Description |
 |---|---|---|
 | `MELODI_BASE_URL` | `http://localhost:8000` | URL de base de votre instance MELODI ERP |
-| `MELODI_API_PREFIX` | `/internal/mcp` | **Préfixe configurable** des routes de l'API MCP MELODI |
+| `MELODI_API_PREFIX` | `/api/melodi_mcp/internal` | **Préfixe configurable** des routes de l'API MCP MELODI |
 | `MELODI_API_KEY` | *(vide)* | Clé secrète de service pour s'authentifier auprès de l'ERP |
 | `MELODI_TIMEOUT_SECONDS` | `30.0` | Timeout des requêtes HTTP vers MELODI (en secondes) |
 | `MELODI_VERIFY_SSL` | `true` | Vérification TLS des certificats HTTPS |
@@ -118,7 +118,7 @@ cp .env.example .env
 | `MCP_SERVER_PORT` | `8765` | Port d'écoute en mode HTTP |
 | `ADMIN_DASHBOARD_ENABLED` | `true` | Activer la console d'administration web |
 | `ADMIN_PREFIX` | `/admin` | Préfixe d'accès à la console d'administration |
-| `ADMIN_API_KEY` | *(vide)* | Clé d'API optionnelle pour restreindre l'accès à l'admin |
+| `ADMIN_API_KEY` | `admin` | Clé d'API d'authentification pour la console d'administration |
 | `CATALOG_SYNC_INTERVAL_SECONDS` | `60` | Fréquence de resynchronisation automatique du catalogue |
 | `MAX_REQUEST_SIZE_BYTES` | `1048576` (1 Mo) | Plafond de taille des arguments reçus |
 | `MAX_RESPONSE_SIZE_BYTES` | `5242880` (5 Mo) | Plafond de taille des réponses acceptées |
@@ -201,7 +201,7 @@ Pour connecter Claude Desktop à `melodi_mcp_server`, ajoutez la configuration s
       "args": ["--transport", "stdio"],
       "env": {
         "MELODI_BASE_URL": "http://localhost:8000",
-        "MELODI_API_PREFIX": "/internal/mcp",
+        "MELODI_API_PREFIX": "/api/melodi_mcp/internal",
         "MELODI_API_KEY": "votre_cle_secrete_melodi"
       }
     }

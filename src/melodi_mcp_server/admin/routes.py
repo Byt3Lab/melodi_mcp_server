@@ -10,7 +10,7 @@ from ..health import HealthChecker
 from ..metrics import get_metrics
 from ..settings import Settings, get_settings
 from ..tool_registry import DynamicToolRegistry
-from .templates import DASHBOARD_HTML
+from .templates import DASHBOARD_HTML, LOGIN_HTML
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +29,42 @@ def create_admin_routes(
         if not settings.admin_api_key or not settings.admin_api_key.get_secret_value():
             return True
         expected = settings.admin_api_key.get_secret_value()
+
+        # 1. Si un paramètre de requête explicite est fourni
+        if "api_key" in request.query_params:
+            return request.query_params["api_key"] == expected
+
+        # 2. Si un en-tête Authorization explicite est fourni
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            token = auth_header[7:].strip()
-            if token == expected:
-                return True
-        query_key = request.query_params.get("api_key", "")
-        return query_key == expected
+            return auth_header[7:].strip() == expected
+
+        # 3. Si un en-tête X-API-Key explicite est fourni
+        if "X-API-Key" in request.headers:
+            return request.headers["X-API-Key"] == expected
+
+        # 4. Repli sur le cookie de session
+        cookie_key = request.cookies.get("admin_api_key", "")
+        if cookie_key == expected:
+            return True
+
+        # 5. Si la clé est la clé par défaut 'admin', accès direct autorisé sans forcer la saisie
+        if expected == "admin":
+            return True
+
+        return False
 
     async def dashboard_view(request: Request) -> HTMLResponse:
-        """Page HTML principale du dashboard."""
+        """Page HTML principale du dashboard ou mire de connexion."""
         if not _check_auth(request):
-            return HTMLResponse("<h1>401 Accès refusé : clé d'administration requise</h1>", status_code=401)
-        return HTMLResponse(DASHBOARD_HTML)
+            return HTMLResponse(LOGIN_HTML, status_code=200)
+        response = HTMLResponse(DASHBOARD_HTML)
+        if settings.admin_api_key and settings.admin_api_key.get_secret_value():
+            expected = settings.admin_api_key.get_secret_value()
+            query_key = request.query_params.get("api_key", "")
+            if query_key == expected or expected == "admin":
+                response.set_cookie("admin_api_key", expected, path="/", samesite="lax")
+        return response
 
     async def status_api(request: Request) -> JSONResponse:
         """Endpoint JSON d'état de santé et de métriques en temps réel."""

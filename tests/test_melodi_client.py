@@ -18,7 +18,7 @@ from melodi_mcp_server.settings import Settings
 @respx.mock
 async def test_03_melodi_client_connection_and_headers(mock_settings):
     """Test 3: Connexion au client MELODI, utilisation du préfixe dynamique et vérification des headers."""
-    route = respx.get("http://test-melodi:8000/internal/mcp/health").respond(
+    route = respx.get("http://test-melodi:8000/api/melodi_mcp/internal/health").respond(
         status_code=200,
         json={"status": "healthy"},
     )
@@ -38,7 +38,7 @@ async def test_03_melodi_client_connection_and_headers(mock_settings):
 async def test_04_melodi_client_network_unavailability_and_timeout(mock_settings):
     """Test 4: Gestion d'une indisponibilité réseau ou d'un timeout."""
     # Simulation d'un timeout
-    respx.get("http://test-melodi:8000/internal/mcp/health").mock(
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/health").mock(
         side_effect=httpx.TimeoutException("Délai d'attente réseau expiré")
     )
 
@@ -47,7 +47,7 @@ async def test_04_melodi_client_network_unavailability_and_timeout(mock_settings
             await client.get_health()
 
     # Simulation d'une erreur de connexion (serveur injoignable)
-    respx.get("http://test-melodi:8000/internal/mcp/health").mock(
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/health").mock(
         side_effect=httpx.ConnectError("Connexion refusée")
     )
     async with MelodiAsyncClient(mock_settings) as client:
@@ -59,7 +59,7 @@ async def test_04_melodi_client_network_unavailability_and_timeout(mock_settings
 @respx.mock
 async def test_05_melodi_client_get_manifest(mock_settings, sample_manifest_payload):
     """Test 5: Chargement et désérialisation du manifeste MELODI."""
-    respx.get("http://test-melodi:8000/internal/mcp/manifest").respond(
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/manifest").respond(
         status_code=200,
         json=sample_manifest_payload,
     )
@@ -75,7 +75,7 @@ async def test_05_melodi_client_get_manifest(mock_settings, sample_manifest_payl
 @respx.mock
 async def test_06_melodi_client_get_tools(mock_settings, sample_catalog_payload):
     """Test 6: Chargement du catalogue d'outils."""
-    respx.get("http://test-melodi:8000/internal/mcp/tools").respond(
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/tools").respond(
         status_code=200,
         json=sample_catalog_payload,
     )
@@ -91,8 +91,8 @@ async def test_06_melodi_client_get_tools(mock_settings, sample_catalog_payload)
 @respx.mock
 async def test_melodi_client_handles_auth_error_and_404(mock_settings):
     """Vérifie la levée des exceptions typées pour 401 et 404."""
-    respx.get("http://test-melodi:8000/internal/mcp/health").respond(status_code=401)
-    respx.get("http://test-melodi:8000/internal/mcp/tools").respond(status_code=404)
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/health").respond(status_code=401)
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/tools").respond(status_code=404)
 
     async with MelodiAsyncClient(mock_settings) as client:
         with pytest.raises(MelodiAuthenticationError):

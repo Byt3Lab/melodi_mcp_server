@@ -24,7 +24,7 @@ async def test_12_execute_read_tool(setup_dispatcher):
     """Test 12: Exécution réussie d'un outil en lecture."""
     dispatcher, _, _ = setup_dispatcher
 
-    respx.post("http://test-melodi:8000/internal/mcp/tools/accounting_get_balance/execute").respond(
+    respx.post("http://test-melodi:8000/api/melodi_mcp/internal/tools/accounting_get_balance/execute").respond(
         status_code=200,
         json={"balance": 54200.0, "currency": "EUR"},
     )
@@ -34,7 +34,7 @@ async def test_12_execute_read_tool(setup_dispatcher):
         arguments={"account_id": "ACC-512"},
     )
 
-    assert result.is_error is False or result.isError is False
+    assert result.is_error is False
     assert len(result.content) == 1
     assert "54200" in result.content[0].text
 
@@ -50,11 +50,11 @@ async def test_13_execute_write_tool_with_confirmation(setup_dispatcher):
         tool_name="invoice_create",
         arguments={"customer_id": "CUST-1", "amount": 1500.0},
     )
-    assert res_unconfirmed.is_error is True or res_unconfirmed.isError is True
+    assert res_unconfirmed.is_error is True
     assert "requiert une confirmation explicite" in res_unconfirmed.content[0].text
 
     # 2. Appel avec confirmation
-    respx.post("http://test-melodi:8000/internal/mcp/tools/invoice_create/execute").respond(
+    respx.post("http://test-melodi:8000/api/melodi_mcp/internal/tools/invoice_create/execute").respond(
         status_code=200,
         json={"invoice_id": "INV-2026-001", "status": "draft"},
     )
@@ -62,7 +62,7 @@ async def test_13_execute_write_tool_with_confirmation(setup_dispatcher):
         tool_name="invoice_create",
         arguments={"customer_id": "CUST-1", "amount": 1500.0, "_confirmed": True},
     )
-    assert res_confirmed.is_error is False or res_confirmed.isError is False
+    assert res_confirmed.is_error is False
     assert "INV-2026-001" in res_confirmed.content[0].text
 
 
@@ -72,7 +72,7 @@ async def test_14_melodi_business_error_propagation(setup_dispatcher):
     """Test 14: Transmission et formatage propre des erreurs métier MELODI."""
     dispatcher, _, _ = setup_dispatcher
 
-    respx.post("http://test-melodi:8000/internal/mcp/tools/accounting_get_balance/execute").respond(
+    respx.post("http://test-melodi:8000/api/melodi_mcp/internal/tools/accounting_get_balance/execute").respond(
         status_code=422,
         json={"error": "COMPTE_CLOTURE", "message": "Ce compte comptable est clôturé."},
     )
@@ -81,7 +81,7 @@ async def test_14_melodi_business_error_propagation(setup_dispatcher):
         tool_name="accounting_get_balance",
         arguments={"account_id": "ACC-999"},
     )
-    assert result.is_error is True or result.isError is True
+    assert result.is_error is True
     assert "Erreur [ToolExecutionError]" in result.content[0].text
     assert "422" in result.content[0].text
 
@@ -96,7 +96,7 @@ async def test_15_local_argument_validation_rejection(setup_dispatcher):
         tool_name="accounting_get_balance",
         arguments={},
     )
-    assert result.is_error is True or result.isError is True
+    assert result.is_error is True
     assert "ToolValidationError" in result.content[0].text
     assert "account_id" in result.content[0].text
 
@@ -111,7 +111,7 @@ async def test_16_tool_execution_timeout(setup_dispatcher):
         await asyncio.sleep(10.0)
         return respx.MockResponse(200)
 
-    respx.post("http://test-melodi:8000/internal/mcp/tools/accounting_get_balance/execute").mock(
+    respx.post("http://test-melodi:8000/api/melodi_mcp/internal/tools/accounting_get_balance/execute").mock(
         side_effect=slow_response
     )
 
@@ -122,7 +122,7 @@ async def test_16_tool_execution_timeout(setup_dispatcher):
         tool_name="accounting_get_balance",
         arguments={"account_id": "ACC-512"},
     )
-    assert result.is_error is True or result.isError is True
+    assert result.is_error is True
     assert "Dépassement du délai d'exécution alloué" in result.content[0].text
 
 
@@ -135,7 +135,7 @@ async def test_17_unknown_tool_rejection(setup_dispatcher):
         tool_name="non_existent_tool",
         arguments={},
     )
-    assert result.is_error is True or result.isError is True
+    assert result.is_error is True
     assert "ToolNotFoundError" in result.content[0].text
 
 
@@ -145,7 +145,7 @@ async def test_22_authorization_revalidation_by_melodi(setup_dispatcher):
     """Test 22: Revalidation systématique de l'autorisation par MELODI (403 Forbidden)."""
     dispatcher, _, _ = setup_dispatcher
 
-    respx.post("http://test-melodi:8000/internal/mcp/tools/accounting_get_balance/execute").respond(
+    respx.post("http://test-melodi:8000/api/melodi_mcp/internal/tools/accounting_get_balance/execute").respond(
         status_code=403,
         json={"error": "FORBIDDEN", "message": "Permission comptable révoquée."},
     )
@@ -155,5 +155,5 @@ async def test_22_authorization_revalidation_by_melodi(setup_dispatcher):
         arguments={"account_id": "ACC-512"},
         context=SecurityContext(client_id="test_client", user_id="user_1", is_authenticated=True),
     )
-    assert result.is_error is True or result.isError is True
+    assert result.is_error is True
     assert "MelodiAuthorizationError" in result.content[0].text

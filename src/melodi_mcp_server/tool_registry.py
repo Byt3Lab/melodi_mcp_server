@@ -97,7 +97,9 @@ class DynamicToolRegistry:
             raise ToolValidationError(f"Schéma JSON invalide pour l'outil '{name}': {e.message}")
 
         read_only = bool(raw.get("read_only", True))
-        requires_confirmation = bool(raw.get("requires_confirmation", False))
+        requires_confirmation = bool(
+            raw.get("requires_confirmation", raw.get("confirmation_required", False))
+        )
         timeout = float(raw.get("timeout_seconds", self.settings.melodi_timeout_seconds))
         permissions = raw.get("required_permissions", [])
         if not isinstance(permissions, list):
@@ -116,7 +118,10 @@ class DynamicToolRegistry:
 
     async def update_from_payload(self, catalog_data: dict[str, Any], force: bool = False) -> int:
         """Met à jour le registre atomiquement à partir de la charge utile de l'API."""
-        revision = catalog_data.get("catalog_revision")
+        revision = catalog_data.get("catalog_revision") or catalog_data.get("revision")
+        if not revision and isinstance(catalog_data.get("data"), dict):
+            revision = catalog_data["data"].get("catalog_revision") or catalog_data["data"].get("revision")
+
         if not force and revision and revision == self.catalog_revision:
             logger.debug("Catalogue inchangé (révision '%s'). Mise à jour ignorée.", revision)
             self.last_sync_success = True
@@ -124,7 +129,15 @@ class DynamicToolRegistry:
             self.last_sync_error = None
             return len(self._tools)
 
-        raw_tools = catalog_data.get("tools", [])
+        # Extraction des outils (supporte le format plat ou imbriqué sous 'data')
+        raw_tools = None
+        if "tools" in catalog_data and isinstance(catalog_data["tools"], list):
+            raw_tools = catalog_data["tools"]
+        elif isinstance(catalog_data.get("data"), dict) and isinstance(catalog_data["data"].get("tools"), list):
+            raw_tools = catalog_data["data"]["tools"]
+        else:
+            raw_tools = []
+
         if not isinstance(raw_tools, list):
             raise ToolValidationError("Le champ 'tools' doit être une liste")
 

@@ -1,6 +1,6 @@
 """Configuration centralisée pour melodi_mcp_server."""
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -33,12 +33,12 @@ class Settings(BaseSettings):
         description="URL de base de l'instance MELODI ERP",
     )
     melodi_api_prefix: str = Field(
-        default="/internal/mcp",
+        default="/api/melodi_mcp/internal",
         description="Préfixe configurable des routes de l'API MCP MELODI",
     )
     melodi_api_key: SecretStr = Field(
-        default=SecretStr(""),
-        description="Clé secrète d'authentification pour l'API MELODI",
+        default=SecretStr("mcp-internal-secret-token"),
+        description="Clé secrète d'authentification pour l'API MELODI (défaut ERP: mcp-internal-secret-token)",
     )
     melodi_timeout_seconds: float = Field(
         default=30.0,
@@ -76,8 +76,8 @@ class Settings(BaseSettings):
         description="Préfixe d'accès à la console d'administration",
     )
     admin_api_key: Optional[SecretStr] = Field(
-        default=None,
-        description="Clé d'accès optionnelle pour sécuriser le dashboard",
+        default=SecretStr("admin"),
+        description="Clé d'accès pour sécuriser le dashboard (par défaut: admin)",
     )
 
     # --- Catalogue & Exécution ---
@@ -120,6 +120,13 @@ class Settings(BaseSettings):
     @classmethod
     def validate_admin_prefix(cls, v: str) -> str:
         return normalize_url_path(v)
+
+    @field_validator("admin_api_key", mode="before")
+    @classmethod
+    def validate_admin_api_key(cls, v: Any) -> Any:
+        if v == "" or (isinstance(v, SecretStr) and not v.get_secret_value()):
+            return None
+        return v
 
     def get_melodi_endpoint(self, endpoint_name: str) -> str:
         """Construit l'URL complète pour un endpoint MELODI donné en respectant le préfixe configuré."""

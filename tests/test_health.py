@@ -15,7 +15,7 @@ async def test_health_checker_healthy_and_unhealthy(mock_settings, sample_catalo
     health_checker = HealthChecker(registry, client, mock_settings)
 
     # Cas 1: ERP connecté et catalogue chargé
-    respx.get("http://test-melodi:8000/internal/mcp/health").respond(
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/health").respond(
         status_code=200,
         json={"status": "healthy"},
     )
@@ -27,6 +27,6 @@ async def test_health_checker_healthy_and_unhealthy(mock_settings, sample_catalo
     assert status_data["catalog"]["tools_count"] == 2
 
     # Cas 2: ERP déconnecté
-    respx.get("http://test-melodi:8000/internal/mcp/health").respond(status_code=500)
+    respx.get("http://test-melodi:8000/api/melodi_mcp/internal/health").respond(status_code=500)
     status_degraded = await health_checker.check()
     assert status_degraded["status"] == "DEGRADED"  # Outils en cache mais ERP down
