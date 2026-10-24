@@ -186,7 +186,58 @@ Accessible par défaut sur : **`http://localhost:8765/admin`**
 
 ---
 
-## 9. Connexion avec un Client MCP (ex: Claude Desktop)
+## 9. Agent IA Interactif (Client MCP Intégré)
+
+Le projet inclut un agent conversationnel en ligne de commande directement opérationnel, capable de se connecter au serveur MCP (en HTTP Streamable ou STDIO), de découvrir dynamiquement l'intégralité des outils de MELODI ERP et de les invoquer selon les instructions de l'utilisateur.
+
+### Lancement direct :
+
+```bash
+# 1. Mode Simulé Autonome (Fonctionne immédiatement SANS clé API payante) :
+./agent_runner.py
+# ou : ./venv/bin/melodi-agent
+
+# 2. Mode OpenAI (avec function calling réel) :
+OPENAI_API_KEY="sk-..." ./agent_runner.py --provider openai --model gpt-4o-mini
+
+# 3. Mode Ollama (100% Local et Gratuit) :
+./agent_runner.py --provider ollama --model llama3.1
+
+# 4. Connexion via STDIO (lance le serveur à la volée sans daemon HTTP) :
+./agent_runner.py --transport stdio
+```
+
+### Exemple d'interaction dans le terminal :
+
+```text
+=================================================================
+ 🤖 AGENT IA INTERACTIF CONNECTÉ À MELODI MCP
+=================================================================
+ • Transport MCP     : HTTP
+ • Moteur IA         : SIMULATED (builtin-intent-agent)
+ • Outils découverts : 7 outils enregistrés
+    - ecoblog_create_article : Rédige et publie un nouvel article...
+    - ecoblog_get_stats : Tableau de bord analytique du blog...
+    - ecoblog_list_articles : Liste paginée des articles...
+=================================================================
+
+melodi-agent> Donne-moi les statistiques du blog
+[Agent IA - Intention détectée] -> Appel de l'outil MCP 'ecoblog_get_stats' avec {}...
+✅ [Résultat reçu depuis MELODI ERP via MCP]
+Outil exécuté : ecoblog_get_stats
+{
+  "total_articles": 5,
+  "total_views": 0,
+  "by_category": { "fintech": 1, "macroéconomie": 1, ... }
+}
+
+melodi-agent> /tools
+📋 Outils MCP disponibles (7) : ...
+```
+
+---
+
+## 10. Connexion avec un Client MCP Tiers (ex: Claude Desktop)
 
 Pour connecter Claude Desktop à `melodi_mcp_server`, ajoutez la configuration suivante dans votre fichier de configuration (`claude_desktop_config.json`) :
 

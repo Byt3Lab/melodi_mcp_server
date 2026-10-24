@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Optional
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -45,14 +45,14 @@ class MelodiMcpServerApp:
         """Enregistre les handlers MCP officiels auprès du serveur bas-niveau."""
 
         async def handle_list_tools(
-            req: types.PaginatedRequestParams, extra: types.ServerRequest
+            ctx: Any, req: types.PaginatedRequestParams
         ) -> types.ListToolsResult:
             tools = self.registry.list_mcp_tools()
             logger.debug("Diffusion de la liste des outils MCP (%d outils disponibles)", len(tools))
             return types.ListToolsResult(tools=tools)
 
         async def handle_call_tool(
-            req: types.CallToolRequestParams, extra: types.ServerRequest
+            ctx: Any, req: types.CallToolRequestParams
         ) -> types.CallToolResult:
             args = req.arguments or {}
             result = await self.dispatcher.execute_tool(req.name, args)
@@ -119,11 +119,17 @@ class MelodiMcpServerApp:
 
         from contextlib import asynccontextmanager
 
+        session_mgr = self.server._session_manager
+
         @asynccontextmanager
         async def lifespan(app):
             await self.startup()
             try:
-                yield
+                if session_mgr:
+                    async with session_mgr.run():
+                        yield
+                else:
+                    yield
             finally:
                 await self.shutdown()
 

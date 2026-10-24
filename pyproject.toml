@@ -31,6 +31,7 @@ dev = [
 
 [project.scripts]
 melodi-mcp-server = "melodi_mcp_server.main:run_cli"
+melodi-agent = "melodi_mcp_server.agent:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/melodi_mcp_server"]
