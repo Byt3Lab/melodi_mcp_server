@@ -4,7 +4,8 @@ import asyncio
 import logging
 from typing import Any, Optional
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.middleware import Middleware
+from starlette.responses import JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 from mcp.server.lowlevel import Server
@@ -15,11 +16,32 @@ import mcp.types as types
 from .admin.routes import create_admin_routes
 from .health import HealthChecker
 from .melodi_client import MelodiAsyncClient
+from .security import McpAuthMiddleware
 from .settings import Settings, get_settings
 from .tool_dispatcher import ToolDispatcher
 from .tool_registry import DynamicToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+class RootMcpApp:
+    """Passerelle pour router le trafic MCP sur / ou rediriger les navigateurs vers /admin."""
+
+    def __init__(self, mcp_handler, admin_prefix: str = "/admin"):
+        self.mcp_handler = mcp_handler
+        self.admin_prefix = admin_prefix
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "GET":
+            headers = dict(scope.get("headers", []))
+            accept = headers.get(b"accept", b"").decode("latin1", errors="ignore")
+            # Rediriger vers l'admin si la requête provient d'un navigateur
+            if "text/html" in accept and "text/event-stream" not in accept:
+                response = RedirectResponse(url=self.admin_prefix, status_code=307)
+                await response(scope, receive, send)
+                return
+        # Sinon, traiter comme une requête MCP (VS Code, Copilot, Cursor, etc.)
+        await self.mcp_handler(scope, receive, send)
 
 
 class MelodiMcpServerApp:
@@ -96,12 +118,24 @@ class MelodiMcpServerApp:
         """Crée l'application Web unifiée pour le transport HTTP Streamable / SSE et l'Admin."""
         mcp_app = self.server.streamable_http_app()
 
+        mcp_handler = None
+        for r in mcp_app.routes:
+            if getattr(r, "path", "") == "/mcp":
+                mcp_handler = r.endpoint
+                break
+
+        routes = list(mcp_app.routes)
+        if mcp_handler:
+            # Compatibilité étendue avec les clients MCP (VS Code Copilot, Cursor, etc.)
+            # permettant de cibler soit '/', '/mcp', ou '/sse'
+            routes.append(Route("/", RootMcpApp(mcp_handler, self.settings.admin_prefix)))
+            routes.append(Route("/sse", mcp_handler))
+
         async def health_endpoint(request) -> JSONResponse:
             health_data = await self.health_checker.check()
             status_code = 200 if health_data["status"] in ("HEALTHY", "DEGRADED") else 503
             return JSONResponse(health_data, status_code=status_code)
 
-        routes = list(mcp_app.routes)
         routes.append(Route("/health", health_endpoint, methods=["GET"]))
 
         # Ajout du Dashboard d'Administration si activé
@@ -133,4 +167,16 @@ class MelodiMcpServerApp:
             finally:
                 await self.shutdown()
 
-        return Starlette(routes=routes, lifespan=lifespan)
+        middleware = []
+        api_key_str = self.settings.mcp_api_key.get_secret_value() if self.settings.mcp_api_key else None
+        if api_key_str:
+            middleware.append(
+                Middleware(
+                    McpAuthMiddleware,
+                    api_key=api_key_str,
+                    admin_prefix=self.settings.admin_prefix,
+                )
+            )
+            logger.info("Authentification MCP activée (clé requise pour /mcp, / et /sse).")
+
+        return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)

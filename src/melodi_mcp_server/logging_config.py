@@ -7,6 +7,7 @@ from typing import Optional
 
 SECRET_PATTERNS = [
     re.compile(r"(Bearer\s+)[A-Za-z0-9_\-\.]{8,}", re.IGNORECASE),
+    re.compile(r"(x-mcp-api-key[\"'\s:=]+)[A-Za-z0-9_\-\.]{8,}", re.IGNORECASE),
     re.compile(r"(api[_-]?key[\"'\s:=]+)[A-Za-z0-9_\-\.]{8,}", re.IGNORECASE),
     re.compile(r"(token[\"'\s:=]+)[A-Za-z0-9_\-\.]{8,}", re.IGNORECASE),
     re.compile(r"(password[\"'\s:=]+)[^\s,\"'\&]+", re.IGNORECASE),

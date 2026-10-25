@@ -65,6 +65,10 @@ class Settings(BaseSettings):
         le=65535,
         description="Port d'écoute du serveur HTTP",
     )
+    mcp_api_key: Optional[SecretStr] = Field(
+        default=None,
+        description="Clé secrète d'accès optionnelle exigée auprès des clients MCP (Bearer token / X-API-Key)",
+    )
 
     # --- Console Web d'Administration ---
     admin_dashboard_enabled: bool = Field(

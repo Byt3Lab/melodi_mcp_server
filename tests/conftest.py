@@ -24,6 +24,7 @@ def mock_settings() -> Settings:
         admin_dashboard_enabled=True,
         admin_prefix="/admin",
         admin_api_key=None,
+        mcp_api_key=None,
         catalog_sync_interval_seconds=10,
     )
     set_settings(s)

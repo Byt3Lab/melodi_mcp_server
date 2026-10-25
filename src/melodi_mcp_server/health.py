@@ -59,6 +59,7 @@ class HealthChecker:
                 "version": "0.1.0",
                 "uptime_seconds": uptime_seconds,
                 "transport": self.settings.mcp_transport,
+                "auth_required": bool(self.settings.mcp_api_key and self.settings.mcp_api_key.get_secret_value()),
             },
             "melodi_connection": {
                 "base_url": self.settings.melodi_base_url,

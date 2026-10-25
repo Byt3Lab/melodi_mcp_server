@@ -38,10 +38,12 @@ class MelodiMCPAgent:
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        mcp_api_key: Optional[str] = None,
     ):
         self.transport = transport
         self.server_url = server_url
         self.stdio_cmd = stdio_cmd
+        self.mcp_api_key = mcp_api_key or os.getenv("MCP_API_KEY")
 
         # Configuration LLM
         self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
@@ -258,7 +260,11 @@ class MelodiMCPAgent:
                     await self._interactive_repl(session)
         else:
             print(f"🔗 Connexion au serveur MCP via Streamable HTTP ({self.server_url})...")
-            async with streamable_http_client(self.server_url) as (read_stream, write_stream):
+            headers = {}
+            if self.mcp_api_key:
+                headers["X-MCP-API-KEY"] = self.mcp_api_key
+            http_client = httpx.AsyncClient(headers=headers) if headers else None
+            async with streamable_http_client(self.server_url, http_client=http_client) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await self._interactive_repl(session)
 
@@ -353,6 +359,11 @@ def main() -> None:
         help="URL du point de terminaison MCP Streamable HTTP (défaut: http://127.0.0.1:8765/mcp)",
     )
     parser.add_argument(
+        "--mcp-api-key",
+        default=None,
+        help="Clé secrète requise par le serveur MCP (ou variable MCP_API_KEY)",
+    )
+    parser.add_argument(
         "--provider",
         choices=["auto", "openai", "ollama", "simulated"],
         default="auto",
@@ -383,6 +394,7 @@ def main() -> None:
         model=args.model,
         api_key=args.api_key,
         base_url=args.base_url,
+        mcp_api_key=args.mcp_api_key,
     )
 
     try:

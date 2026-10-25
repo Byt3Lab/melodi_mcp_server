@@ -1,0 +1,62 @@
+services:
+  melodi-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: melodi-mcp-server
+    restart: unless-stopped
+    ports:
+      - "${MCP_SERVER_PORT:-8765}:8765"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - MELODI_BASE_URL=${MELODI_BASE_URL:-http://host.docker.internal:8000}
+      - MELODI_API_PREFIX=${MELODI_API_PREFIX:-/api/melodi_mcp/internal}
+      - MELODI_API_KEY=${MELODI_API_KEY:-mcp-internal-secret-token}
+      - MELODI_TIMEOUT_SECONDS=${MELODI_TIMEOUT_SECONDS:-30.0}
+      - MELODI_VERIFY_SSL=${MELODI_VERIFY_SSL:-true}
+      - MCP_TRANSPORT=http
+      - MCP_SERVER_HOST=0.0.0.0
+      - MCP_SERVER_PORT=8765
+      - MCP_API_KEY=${MCP_API_KEY:-}
+      - ADMIN_DASHBOARD_ENABLED=${ADMIN_DASHBOARD_ENABLED:-true}
+      - ADMIN_PREFIX=${ADMIN_PREFIX:-/admin}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-admin}
+      - CATALOG_SYNC_INTERVAL_SECONDS=${CATALOG_SYNC_INTERVAL_SECONDS:-60}
+      - MAX_REQUEST_SIZE_BYTES=${MAX_REQUEST_SIZE_BYTES:-1048576}
+      - MAX_RESPONSE_SIZE_BYTES=${MAX_RESPONSE_SIZE_BYTES:-5242880}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    extra_hosts:
+      # Permet au conteneur de contacter MELODI ERP s'il tourne sur la machine hôte
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8765/health | grep -q 'melodi_mcp_server' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Profil optionnel pour exécuter l'agent CLI interactif connecté au serveur MCP
+  # Utilisation : docker compose run --rm agent
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: melodi-mcp-agent
+    profiles:
+      - cli
+    entrypoint: ["melodi-agent"]
+    command: ["--transport", "http", "--url", "http://melodi-mcp-server:8765/mcp"]
+    depends_on:
+      melodi-mcp-server:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - MCP_API_KEY=${MCP_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

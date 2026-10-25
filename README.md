@@ -14,7 +14,7 @@ Cette application agit comme une passerelle d'adaptation sécurisée et dynamiqu
 2. [Spécification du Contrat Interne MELODI (v1)](#2-spécification-du-contrat-interne-melodi-v1)
 3. [Prérequis & Installation](#3-prérequis--installation)
 4. [Configuration](#4-configuration)
-5. [Démarrage & Transports (STDIO & HTTP)](#5-démarrage--transports-stdio--http)
+5. [Démarrage & Transports (STDIO, HTTP & Docker)](#5-démarrage--transports-stdio--http)
 6. [Console d'Administration Web (`/admin`)](#6-console-dadministration-web-admin)
 7. [Cycle de Vie & Synchronisation Dynamique](#7-cycle-de-vie--synchronisation-dynamique)
 8. [Sécurité & Confidentialité](#8-sécurité--confidentialité)
@@ -116,6 +116,7 @@ cp .env.example .env
 | `MCP_TRANSPORT` | `stdio` | Mode de transport : `stdio` (local) ou `http`/`sse` (réseau) |
 | `MCP_SERVER_HOST` | `127.0.0.1` | Adresse d'écoute en mode HTTP |
 | `MCP_SERVER_PORT` | `8765` | Port d'écoute en mode HTTP |
+| `MCP_API_KEY` | *(vide)* | Clé secrète optionnelle exigée auprès des clients MCP (en-tête exclusif `X-MCP-API-KEY`) |
 | `ADMIN_DASHBOARD_ENABLED` | `true` | Activer la console d'administration web |
 | `ADMIN_PREFIX` | `/admin` | Préfixe d'accès à la console d'administration |
 | `ADMIN_API_KEY` | `admin` | Clé d'API d'authentification pour la console d'administration |
@@ -140,7 +141,7 @@ melodi-mcp-server --transport stdio
 ```
 
 ### Mode 2 : HTTP / SSE & Console d'Administration
-Idéal pour les déploiements conteneurisés, micro-services ou accès réseau partagé.
+Idéal pour les déploiements locaux ou sur serveur dédié.
 
 ```bash
 melodi-mcp-server --transport http --host 0.0.0.0 --port 8765
@@ -150,6 +151,52 @@ Endpoints exposés en mode HTTP :
 - `/sse` ou `/mcp` : Endpoint de streaming MCP pour les clients distants.
 - `/health` : Bilan de santé opérationnel (JSON).
 - `/admin` : Console d'administration web responsive.
+
+### Mode 3 : Déploiement Conteneurisé avec Docker & Docker Compose
+
+Un `Dockerfile` multi-stage (léger, sécurisé avec utilisateur non-root `appuser` et healthcheck intégré) ainsi qu'un fichier `docker-compose.yml` sont fournis pour un déploiement instantané.
+
+#### 1. Lancement avec Docker Compose :
+
+```bash
+# Démarrer le serveur en tâche de fond (port 8765)
+docker compose up -d
+
+# Consulter les journaux en direct
+docker compose logs -f melodi-mcp-server
+
+# Vérifier l'état de santé du conteneur
+docker compose ps
+
+# Arrêter les services
+docker compose down
+```
+
+> [!TIP]
+> Dans `docker-compose.yml`, la variable `MELODI_BASE_URL` pointe par défaut sur `http://host.docker.internal:8000` via l'instruction `extra_hosts` pour joindre automatiquement une instance MELODI ERP s'exécutant sur votre machine hôte. Vous pouvez surcharger cette valeur dans votre fichier `.env`.
+
+#### 2. Utilisation de l'Agent interactif avec Docker :
+
+Pour lancer l'agent CLI interactif directement au sein d'un conteneur relié au serveur :
+
+```bash
+docker compose run --rm agent
+```
+
+#### 3. Construction et exécution manuelle avec Docker :
+
+```bash
+# Construire l'image
+docker build -t melodi-mcp-server .
+
+# Lancer le conteneur
+docker run -d \
+  --name melodi-mcp-server \
+  -p 8765:8765 \
+  -e MELODI_BASE_URL="http://host.docker.internal:8000" \
+  -e MELODI_API_KEY="votre_cle_secrete_melodi" \
+  melodi-mcp-server
+```
 
 ---
 
@@ -179,6 +226,7 @@ Accessible par défaut sur : **`http://localhost:8765/admin`**
 
 ## 8. Sécurité & Confidentialité
 
+- **Authentification optionnelle des clients MCP** : Grâce au middleware `McpAuthMiddleware`, vous pouvez sécuriser les endpoints `/mcp`, `/sse` et `/` via `MCP_API_KEY`. Tout client distant (comme VS Code) doit obligatoirement fournir l'en-tête exclusif `X-MCP-API-KEY: <clé>`, sans quoi la requête est rejetée avec un code HTTP 401 Unauthorized.
 - **Sanitisation des logs** : Un filtre de journalisation (`SecretMaskingFormatter`) expurge automatiquement tout jeton Bearer, mot de passe ou clé d'API des journaux.
 - **Validation stricte des schémas** : Les arguments envoyés par les clients sont validés localement via `jsonschema.Draft7Validator` avant toute transmission à l'ERP.
 - **Garde-fous sur les outils sensibles** : Les outils marqués `requires_confirmation: true` exigent explicitement l'argument `_confirmed: true` pour s'exécuter.
@@ -237,11 +285,34 @@ melodi-agent> /tools
 
 ---
 
-## 10. Connexion avec un Client MCP Tiers (ex: Claude Desktop)
+## 10. Connexion avec un Client MCP Tiers (VS Code, Copilot, Claude Desktop)
 
-Pour connecter Claude Desktop à `melodi_mcp_server`, ajoutez la configuration suivante dans votre fichier de configuration (`claude_desktop_config.json`) :
+### Option A : Connexion HTTP (VS Code / Copilot Agent / Cursor)
 
-### Sous Linux / macOS :
+Dans votre fichier `.mcp.json` ou via l'interface **Agent Customizations** :
+
+```json
+{
+  "mcpServers": {
+    "melodi": {
+      "type": "http",
+      "url": "http://localhost:8765/mcp",
+      "headers": {
+        "X-MCP-API-KEY": "votre_cle_mcp_si_configuree"
+      }
+    }
+  }
+}
+```
+
+> [!NOTE]
+> Si la variable `MCP_API_KEY` n'est pas renseignée dans votre `.env`, l'objet `"headers"` est facultatif. Si `MCP_API_KEY` est activée, renseignez obligatoirement votre jeton via l'en-tête exclusif `X-MCP-API-KEY: <clé>`.
+
+### Option B : Connexion STDIO locale (Claude Desktop / VS Code)
+
+Pour connecter Claude Desktop à `melodi_mcp_server` en mode processus local :
+
+#### Sous Linux / macOS :
 `~/.config/Claude/claude_desktop_config.json`
 
 ```json

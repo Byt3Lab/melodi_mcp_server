@@ -38,6 +38,10 @@ def parse_args() -> argparse.Namespace:
         help="Préfixe des routes de l'API MCP MELODI (ex: /internal/mcp, /api/v1/mcp)",
     )
     parser.add_argument(
+        "--mcp-api-key",
+        help="Clé secrète requise pour s'authentifier auprès de ce serveur MCP (Bearer token ou X-API-Key)",
+    )
+    parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Niveau de journalisation",
@@ -61,6 +65,8 @@ def main() -> None:
         overrides["melodi_base_url"] = args.melodi_url
     if args.melodi_prefix:
         overrides["melodi_api_prefix"] = args.melodi_prefix
+    if args.mcp_api_key:
+        overrides["mcp_api_key"] = args.mcp_api_key
     if args.log_level:
         overrides["log_level"] = args.log_level
 
