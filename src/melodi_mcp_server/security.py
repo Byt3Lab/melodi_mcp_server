@@ -115,12 +115,20 @@ class McpAuthMiddleware:
 
         if is_mcp_path:
             headers = dict(scope.get("headers", []))
-            # Extraction exclusive de la clé d'API via l'en-tête X-MCP-API-KEY
+            # Extraction de la clé d'API via l'en-tête X-MCP-API-KEY ou le paramètre d'URL ?mcp_api_key=...
             token = headers.get(b"x-mcp-api-key", b"").decode("latin1", errors="ignore").strip()
+
+            if not token:
+                qs = scope.get("query_string", b"").decode("latin1", errors="ignore")
+                if qs:
+                    params = parse_qs(qs)
+                    param_val = params.get("mcp_api_key", [None])[0]
+                    if param_val:
+                        token = param_val.strip()
 
             if not token or not hmac.compare_digest(token, self.api_key):
                 logger.warning(
-                    "Tentative d'accès MCP non autorisé sur %s (en-tête X-MCP-API-KEY absent ou invalide)",
+                    "Tentative d'accès MCP non autorisé sur %s (en-tête X-MCP-API-KEY ou paramètre ?mcp_api_key= absent ou invalide)",
                     path,
                 )
                 error_body = json.dumps({
@@ -130,7 +138,7 @@ class McpAuthMiddleware:
                         "code": -32000,
                         "message": (
                             "Unauthorized: Clé API MCP absente ou invalide. "
-                            "Fournissez obligatoirement l'en-tête 'X-MCP-API-KEY: <clé>'."
+                            "Fournissez l'en-tête 'X-MCP-API-KEY: <clé>' ou le paramètre d'URL '?mcp_api_key=<clé>'."
                         ),
                     },
                 }).encode("utf-8")

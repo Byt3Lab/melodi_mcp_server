@@ -116,7 +116,7 @@ cp .env.example .env
 | `MCP_TRANSPORT` | `stdio` | Mode de transport : `stdio` (local) ou `http`/`sse` (réseau) |
 | `MCP_SERVER_HOST` | `127.0.0.1` | Adresse d'écoute en mode HTTP |
 | `MCP_SERVER_PORT` | `8765` | Port d'écoute en mode HTTP |
-| `MCP_API_KEY` | *(vide)* | Clé secrète optionnelle exigée auprès des clients MCP (en-tête exclusif `X-MCP-API-KEY`) |
+| `MCP_API_KEY` | *(vide)* | Clé secrète optionnelle exigée auprès des clients MCP (`X-MCP-API-KEY` ou paramètre `?mcp_api_key=`) |
 | `ADMIN_DASHBOARD_ENABLED` | `true` | Activer la console d'administration web |
 | `ADMIN_PREFIX` | `/admin` | Préfixe d'accès à la console d'administration |
 | `ADMIN_API_KEY` | `admin` | Clé d'API d'authentification pour la console d'administration |
@@ -226,7 +226,7 @@ Accessible par défaut sur : **`http://localhost:8765/admin`**
 
 ## 8. Sécurité & Confidentialité
 
-- **Authentification optionnelle des clients MCP** : Grâce au middleware `McpAuthMiddleware`, vous pouvez sécuriser les endpoints `/mcp`, `/sse` et `/` via `MCP_API_KEY`. Tout client distant (comme VS Code) doit obligatoirement fournir l'en-tête exclusif `X-MCP-API-KEY: <clé>`, sans quoi la requête est rejetée avec un code HTTP 401 Unauthorized.
+- **Authentification optionnelle des clients MCP** : Grâce au middleware `McpAuthMiddleware`, vous pouvez sécuriser les endpoints `/mcp`, `/sse` et `/` via `MCP_API_KEY`. Tout client distant (comme VS Code) doit obligatoirement s'authentifier via l'en-tête `X-MCP-API-KEY: <clé>` ou via le paramètre d'URL `?mcp_api_key=<clé>`, sans quoi la requête est rejetée avec un code HTTP 401 Unauthorized.
 - **Sanitisation des logs** : Un filtre de journalisation (`SecretMaskingFormatter`) expurge automatiquement tout jeton Bearer, mot de passe ou clé d'API des journaux.
 - **Validation stricte des schémas** : Les arguments envoyés par les clients sont validés localement via `jsonschema.Draft7Validator` avant toute transmission à l'ERP.
 - **Garde-fous sur les outils sensibles** : Les outils marqués `requires_confirmation: true` exigent explicitement l'argument `_confirmed: true` pour s'exécuter.
@@ -306,7 +306,7 @@ Dans votre fichier `.mcp.json` ou via l'interface **Agent Customizations** :
 ```
 
 > [!NOTE]
-> Si la variable `MCP_API_KEY` n'est pas renseignée dans votre `.env`, l'objet `"headers"` est facultatif. Si `MCP_API_KEY` est activée, renseignez obligatoirement votre jeton via l'en-tête exclusif `X-MCP-API-KEY: <clé>`.
+> Si la variable `MCP_API_KEY` n'est pas renseignée dans votre `.env`, l'authentification est facultative. Si `MCP_API_KEY` est activée, renseignez votre jeton soit via l'en-tête `"X-MCP-API-KEY": "<clé>"`, soit directement dans l'URL : `"url": "http://localhost:8765/mcp?mcp_api_key=<clé>"`.
 
 ### Option B : Connexion STDIO locale (Claude Desktop / VS Code)
 

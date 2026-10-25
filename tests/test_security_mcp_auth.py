@@ -127,3 +127,24 @@ async def test_mcp_auth_enforced_when_configured(auth_settings, sample_catalog_p
             json=init_payload,
         )
         assert r_ok_sse.status_code == 200
+
+        # 9. Requête avec paramètre d'URL invalide ?mcp_api_key=mauvais -> 401
+        r_bad_query = client.post(
+            "/mcp?mcp_api_key=mauvaise-cle",
+            json=init_payload,
+        )
+        assert r_bad_query.status_code == 401
+
+        # 10. Requête avec paramètre d'URL valide ?mcp_api_key=... sur /mcp -> 200
+        r_ok_query_mcp = client.post(
+            "/mcp?mcp_api_key=test-secret-token-xyz",
+            json=init_payload,
+        )
+        assert r_ok_query_mcp.status_code == 200
+
+        # 11. Requête avec paramètre d'URL valide ?mcp_api_key=... sur / -> 200
+        r_ok_query_root = client.post(
+            "/?mcp_api_key=test-secret-token-xyz",
+            json=init_payload,
+        )
+        assert r_ok_query_root.status_code == 200
