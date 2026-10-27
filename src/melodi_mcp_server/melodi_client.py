@@ -48,6 +48,7 @@ class MelodiAsyncClient:
         correlation_id: Optional[str] = None,
         user_id: Optional[str] = None,
         org_id: Optional[str] = None,
+        user_key: Optional[str] = None,
     ) -> dict[str, str]:
         """Génère les en-têtes d'authentification et de traçabilité."""
         cid = correlation_id or str(uuid.uuid4())
@@ -62,6 +63,8 @@ class MelodiAsyncClient:
             headers["X-Internal-MCP-Key"] = api_key
             headers["X-Melodi-Service-Token"] = api_key
 
+        if user_key:
+            headers["X-User-MCP-Key"] = str(user_key)
         if user_id:
             headers["X-Melodi-User-ID"] = str(user_id)
         if org_id:
@@ -82,11 +85,12 @@ class MelodiAsyncClient:
         correlation_id: Optional[str] = None,
         user_id: Optional[str] = None,
         org_id: Optional[str] = None,
+        user_key: Optional[str] = None,
         json_data: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Exécute une requête HTTP avec gestion robuste des erreurs et des délais."""
         url = self._resolve_url(path)
-        headers = self._build_headers(correlation_id=correlation_id, user_id=user_id, org_id=org_id)
+        headers = self._build_headers(correlation_id=correlation_id, user_id=user_id, org_id=org_id, user_key=user_key)
         cid = headers["X-Correlation-ID"]
 
         try:
@@ -202,9 +206,9 @@ class MelodiAsyncClient:
         """Récupère le manifeste du module melodi_mcp."""
         return await self._request("GET", "/manifest")
 
-    async def get_tools(self) -> dict[str, Any]:
+    async def get_tools(self, user_key: Optional[str] = None) -> dict[str, Any]:
         """Récupère le catalogue d'outils disponibles auprès de MELODI."""
-        return await self._request("GET", "/tools")
+        return await self._request("GET", "/tools", user_key=user_key)
 
     async def execute_tool(
         self,
@@ -213,6 +217,7 @@ class MelodiAsyncClient:
         correlation_id: Optional[str] = None,
         user_id: Optional[str] = None,
         org_id: Optional[str] = None,
+        user_key: Optional[str] = None,
         call_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Transmet l'exécution d'un outil à MELODI."""
@@ -235,5 +240,6 @@ class MelodiAsyncClient:
             correlation_id=correlation_id,
             user_id=user_id,
             org_id=org_id,
+            user_key=user_key,
             json_data=payload,
         )

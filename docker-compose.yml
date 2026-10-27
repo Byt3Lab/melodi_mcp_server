@@ -11,7 +11,7 @@ services:
       - path: .env
         required: false
     environment:
-      - MELODI_BASE_URL=${MELODI_BASE_URL:-http://host.docker.internal:8000}
+      - MELODI_BASE_URL=${MELODI_BASE_URL:-http://host.docker.internal:5000}
       - MELODI_API_PREFIX=${MELODI_API_PREFIX:-/api/melodi_mcp/internal}
       - MELODI_API_KEY=${MELODI_API_KEY:-mcp-internal-secret-token}
       - MELODI_TIMEOUT_SECONDS=${MELODI_TIMEOUT_SECONDS:-30.0}
@@ -36,27 +36,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-
-  # Profil optionnel pour exécuter l'agent CLI interactif connecté au serveur MCP
-  # Utilisation : docker compose run --rm agent
-  agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: melodi-mcp-agent
-    profiles:
-      - cli
-    entrypoint: ["melodi-agent"]
-    command: ["--transport", "http", "--url", "http://melodi-mcp-server:8765/mcp"]
-    depends_on:
-      melodi-mcp-server:
-        condition: service_healthy
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - MCP_API_KEY=${MCP_API_KEY:-}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
