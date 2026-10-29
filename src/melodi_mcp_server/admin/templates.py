@@ -340,6 +340,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 <div class="kpi-title">Latence MELODI ERP</div>
                 <div class="kpi-value" id="kpi-latency">- ms</div>
                 <div class="kpi-sub" id="kpi-erp-status">Liaison : Inconnue</div>
+                <div class="kpi-sub" id="kpi-erp-url" style="word-break: break-all; margin-top: 2px;">URL : Chargement...</div>
             </div>
             <div class="card">
                 <div class="kpi-title">Temps de Fonctionnement</div>
@@ -353,6 +354,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <button class="tab-btn active" onclick="switchTab('tools')">🛠️ Catalogue des Outils</button>
             <button class="tab-btn" onclick="switchTab('history')">📜 Historique des Appels</button>
             <button class="tab-btn" id="tab-btn-users" onclick="switchTab('users')">👥 Gestion des Utilisateurs</button>
+            <button class="tab-btn" id="tab-btn-config" onclick="switchTab('config')">⚙️ Configuration ERP</button>
         </div>
 
         <!-- TAB 1 : Outils -->
@@ -424,6 +426,52 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Chargement des utilisateurs...</td></tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- TAB 4 : Configuration ERP -->
+        <div id="pane-config" class="tab-pane">
+            <div class="section-header">
+                <div class="section-title">Liaison avec le Serveur MELODI ERP</div>
+            </div>
+            <div class="card" style="max-width: 680px;">
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">
+                    Configurez l'adresse réseau de votre instance MELODI ERP. Le changement est immédiatement pris en compte par la passerelle MCP et persisté dans la base SQLite.
+                </p>
+
+                <div id="config-alert" class="alert" style="display: none; margin-bottom: 16px;"></div>
+
+                <form onsubmit="handleSaveConfig(event)">
+                    <div class="form-group">
+                        <label for="cfg-melodi-url">URL Racine du Serveur MELODI ERP *</label>
+                        <input type="url" id="cfg-melodi-url" required placeholder="ex: http://localhost:5000 ou http://host.docker.internal:5000">
+                        <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
+                            Exemple conteneurisé : <code>http://host.docker.internal:5000</code> ou <code>http://melodi_app:5000</code>
+                        </span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cfg-melodi-key">Clé d'API Interne (MELODI_API_KEY)</label>
+                        <input type="password" id="cfg-melodi-key" autocomplete="new-password" placeholder="•••••••• (Laissez vide pour conserver la clé actuelle)">
+                        <span id="cfg-melodi-key-hint" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
+                            Jeton secret partagé avec le module melodi_mcp de l'ERP (X-Internal-MCP-Key).
+                        </span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cfg-api-prefix">Préfixe API MCP (Lecture seule)</label>
+                        <input type="text" id="cfg-api-prefix" readonly style="opacity: 0.7; background: rgba(0,0,0,0.25);">
+                    </div>
+
+                    <div style="display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap;">
+                        <button type="button" id="btn-test-config" class="btn btn-outline" onclick="handleTestConfig()">
+                            🔍 Tester la Connexion
+                        </button>
+                        <button type="submit" id="btn-save-config" class="btn">
+                            💾 Enregistrer & Appliquer
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -518,6 +566,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 document.getElementById('tab-btn-users').classList.add('active');
                 document.getElementById('pane-users').classList.add('active');
                 fetchUsers();
+            } else if (tabId === 'config') {
+                document.getElementById('tab-btn-config').classList.add('active');
+                document.getElementById('pane-config').classList.add('active');
+                fetchConfig();
             }
         }
 
@@ -536,6 +588,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
                 if (currentUser.role !== 'admin') {
                     document.getElementById('tab-btn-users').style.display = 'none';
+                    document.getElementById('tab-btn-config').style.display = 'none';
                     document.getElementById('btn-sync').disabled = true;
                 }
             } catch (e) {
@@ -819,6 +872,131 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
         }
 
+        async function fetchConfig() {
+            try {
+                const res = await fetch(apiBase + '/api/config');
+                if (!res.ok) return;
+                const data = await res.json();
+                const urlInput = document.getElementById('cfg-melodi-url');
+                const keyInput = document.getElementById('cfg-melodi-key');
+                const keyHint = document.getElementById('cfg-melodi-key-hint');
+                const prefixInput = document.getElementById('cfg-api-prefix');
+                const erpUrlLabel = document.getElementById('kpi-erp-url');
+
+                if (urlInput) urlInput.value = data.melodi_base_url || '';
+                if (prefixInput) prefixInput.value = data.melodi_api_prefix || '';
+                if (erpUrlLabel) erpUrlLabel.innerText = 'URL : ' + (data.melodi_base_url || '-');
+
+                if (keyInput) {
+                    keyInput.value = '';
+                    if (data.has_melodi_api_key) {
+                        keyInput.placeholder = 'Clé configurée (' + (data.melodi_api_key_preview || '••••') + ') — Laisser vide pour conserver';
+                        if (keyHint) keyHint.innerHTML = 'Jeton secret partagé (X-Internal-MCP-Key). Actuel : <code>' + escapeHtml(data.melodi_api_key_preview) + '</code>';
+                    } else {
+                        keyInput.placeholder = 'Aucune clé configurée (saisir pour définir)';
+                        if (keyHint) keyHint.innerHTML = 'Jeton secret partagé (X-Internal-MCP-Key). <span style="color: var(--warning-color);">Aucune clé configurée</span>';
+                    }
+                }
+            } catch (e) {
+                console.error('Erreur chargement config :', e);
+            }
+        }
+
+        async function handleTestConfig() {
+            const url = document.getElementById('cfg-melodi-url').value.trim();
+            const key = document.getElementById('cfg-melodi-key').value.trim();
+            const alertBox = document.getElementById('config-alert');
+            const btn = document.getElementById('btn-test-config');
+            alertBox.style.display = 'none';
+
+            if (!url) {
+                alertBox.className = 'alert alert-error';
+                alertBox.innerText = 'Veuillez saisir une URL valide.';
+                alertBox.style.display = 'block';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerText = '🔍 Test en cours...';
+
+            const payload = { melodi_base_url: url };
+            if (key) {
+                payload.melodi_api_key = key;
+            }
+
+            try {
+                const res = await fetch(apiBase + '/api/config/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    alertBox.className = 'alert alert-info';
+                    alertBox.innerText = '✓ ' + (data.message || 'Connexion réussie !');
+                    alertBox.style.display = 'block';
+                } else {
+                    alertBox.className = 'alert alert-error';
+                    alertBox.innerText = '✗ ' + (data.error || 'Échec du test de connexion');
+                    alertBox.style.display = 'block';
+                }
+            } catch (err) {
+                alertBox.className = 'alert alert-error';
+                alertBox.innerText = 'Erreur réseau : ' + err.message;
+                alertBox.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '🔍 Tester la Connexion';
+            }
+        }
+
+        async function handleSaveConfig(e) {
+            e.preventDefault();
+            const url = document.getElementById('cfg-melodi-url').value.trim();
+            const key = document.getElementById('cfg-melodi-key').value.trim();
+            const alertBox = document.getElementById('config-alert');
+            const btn = document.getElementById('btn-save-config');
+            alertBox.style.display = 'none';
+
+            btn.disabled = true;
+            btn.innerText = '💾 Enregistrement...';
+
+            const payload = {};
+            if (url) payload.melodi_base_url = url;
+            if (key) payload.melodi_api_key = key;
+
+            try {
+                const res = await fetch(apiBase + '/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast('Configuration MELODI mise à jour (' + data.tools_count + ' outils synchronisés)');
+                    alertBox.className = 'alert alert-info';
+                    alertBox.innerText = '✓ ' + (data.message || 'Configuration mise à jour avec succès.');
+                    alertBox.style.display = 'block';
+                    fetchStatus();
+                    fetchTools();
+                    fetchConfig();
+                } else {
+                    alertBox.className = 'alert alert-error';
+                    alertBox.innerText = '✗ ' + (data.error || 'Erreur lors de la mise à jour');
+                    alertBox.style.display = 'block';
+                    showToast(data.error || 'Erreur', true);
+                }
+            } catch (err) {
+                alertBox.className = 'alert alert-error';
+                alertBox.innerText = 'Erreur réseau : ' + err.message;
+                alertBox.style.display = 'block';
+                showToast(err.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '💾 Enregistrer & Appliquer';
+            }
+        }
+
         function escapeHtml(str) {
             if (!str) return '';
             return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -828,6 +1006,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         fetchMe();
         fetchStatus();
         fetchTools();
+        fetchConfig();
 
         setInterval(() => {
             if (document.getElementById('auto-refresh').checked) {

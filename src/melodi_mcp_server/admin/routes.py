@@ -306,6 +306,146 @@ def create_admin_routes(
             logger.error("Erreur lors de la synchronisation manuelle depuis l'admin : %s", e)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+    # --- APIs Configuration Système ---
+
+    async def get_config_api(request: Request) -> JSONResponse:
+        """Retourne la configuration actuelle de connexion à MELODI ERP."""
+        current_user = _get_current_user(request)
+        if not current_user:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+        has_key = bool(settings.melodi_api_key and settings.melodi_api_key.get_secret_value())
+        key_preview = ""
+        if has_key:
+            raw_k = settings.melodi_api_key.get_secret_value()
+            key_preview = raw_k[:4] + "••••" + raw_k[-4:] if len(raw_k) > 8 else "••••••••"
+
+        return JSONResponse({
+            "success": True,
+            "melodi_base_url": settings.melodi_base_url,
+            "melodi_api_prefix": settings.melodi_api_prefix,
+            "has_melodi_api_key": has_key,
+            "melodi_api_key_preview": key_preview,
+            "catalog_sync_interval_seconds": settings.catalog_sync_interval_seconds,
+            "user_role": current_user.get("role"),
+        })
+
+    async def test_config_api(request: Request) -> JSONResponse:
+        """Teste la joignabilité d'une URL et clé MELODI ERP sans modifier la configuration active."""
+        current_user = _get_current_user(request)
+        if not current_user:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        if current_user.get("role") != "admin":
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        body = await _parse_body(request)
+        raw_url = (body.get("melodi_base_url") or "").strip().rstrip("/")
+        if not raw_url.startswith(("http://", "https://")):
+            return JSONResponse(
+                {"success": False, "error": "L'URL doit débuter par 'http://' ou 'https://'"},
+                status_code=400,
+            )
+
+        test_api_key = (body.get("melodi_api_key") or "").strip()
+        if not test_api_key and settings.melodi_api_key:
+            test_api_key = settings.melodi_api_key.get_secret_value()
+
+        import time
+        import httpx
+
+        test_health_url = f"{raw_url}{settings.melodi_api_prefix}/health"
+        start_t = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=5.0, verify=settings.melodi_verify_ssl) as test_client:
+                headers = {}
+                if test_api_key:
+                    headers["X-Internal-MCP-Key"] = test_api_key
+                    headers["Authorization"] = f"Bearer {test_api_key}"
+                resp = await test_client.get(test_health_url, headers=headers)
+                latency_ms = round((time.time() - start_t) * 1000, 1)
+
+                if resp.status_code == 200:
+                    return JSONResponse({
+                        "success": True,
+                        "status_code": resp.status_code,
+                        "latency_ms": latency_ms,
+                        "message": f"Connexion réussie vers {raw_url} (HTTP 200, {latency_ms}ms)",
+                    })
+                else:
+                    return JSONResponse({
+                        "success": False,
+                        "status_code": resp.status_code,
+                        "latency_ms": latency_ms,
+                        "error": f"Le serveur a répondu avec le statut HTTP {resp.status_code}",
+                    }, status_code=400)
+        except Exception as e:
+            latency_ms = round((time.time() - start_t) * 1000, 1)
+            return JSONResponse({
+                "success": False,
+                "latency_ms": latency_ms,
+                "error": f"Impossible de joindre {raw_url} : {e}",
+            }, status_code=400)
+
+    async def update_config_api(request: Request) -> JSONResponse:
+        """Met à jour l'URL et/ou la clé API de MELODI ERP à chaud et persiste le changement dans SQLite."""
+        current_user = _get_current_user(request)
+        if not current_user:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        if current_user.get("role") != "admin":
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        body = await _parse_body(request)
+        raw_url = (body.get("melodi_base_url") or "").strip().rstrip("/")
+        new_key = (body.get("melodi_api_key") or "").strip()
+
+        if raw_url and not raw_url.startswith(("http://", "https://")):
+            return JSONResponse(
+                {"success": False, "error": "L'URL doit débuter par 'http://' ou 'https://'"},
+                status_code=400,
+            )
+
+        updated_items = []
+        try:
+            # 1. Mise à jour de l'URL si fournie
+            if raw_url:
+                registry.client.update_base_url(raw_url)
+                database.set_config("melodi_base_url", raw_url)
+                updated_items.append("URL")
+
+            # 2. Mise à jour de la clé API si fournie
+            if new_key:
+                registry.client.update_api_key(new_key)
+                database.set_config("melodi_api_key", new_key)
+                updated_items.append("Clé API")
+
+            if not updated_items:
+                return JSONResponse(
+                    {"success": False, "error": "Aucune modification demandée (URL ou clé API)."},
+                    status_code=400,
+                )
+
+            # 3. Synchronisation immédiate avec l'instance MELODI
+            try:
+                count = await registry.sync_now(force=True)
+            except Exception as sync_err:
+                logger.warning("Synchronisation immédiate post-configuration échouée : %s", sync_err)
+                count = len(registry.list_mcp_tools())
+
+            health_data = await health_checker.check()
+
+            items_str = " et ".join(updated_items)
+            return JSONResponse({
+                "success": True,
+                "melodi_base_url": settings.melodi_base_url,
+                "has_melodi_api_key": bool(settings.melodi_api_key and settings.melodi_api_key.get_secret_value()),
+                "tools_count": count,
+                "health": health_data,
+                "message": f"{items_str} de MELODI ERP mise(s) à jour avec succès.",
+            })
+        except Exception as e:
+            logger.error("Erreur lors de la mise à jour des paramètres MELODI : %s", e)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=400)
+
     routes = [
         # Pages HTML
         Route(f"{prefix}", dashboard_view, methods=["GET"]),
@@ -315,6 +455,10 @@ def create_admin_routes(
         Route(f"{prefix}/api/login", login_api, methods=["POST"]),
         Route(f"{prefix}/api/logout", logout_api, methods=["POST"]),
         Route(f"{prefix}/api/me", me_api, methods=["GET"]),
+        # Configuration Système
+        Route(f"{prefix}/api/config", get_config_api, methods=["GET"]),
+        Route(f"{prefix}/api/config", update_config_api, methods=["POST"]),
+        Route(f"{prefix}/api/config/test", test_config_api, methods=["POST"]),
         # CRUD Utilisateurs
         Route(f"{prefix}/api/users", list_users_api, methods=["GET"]),
         Route(f"{prefix}/api/users", create_user_api, methods=["POST"]),

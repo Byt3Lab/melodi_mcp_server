@@ -4,6 +4,7 @@ import logging
 import uuid
 from typing import Any, Optional
 import httpx
+from pydantic import SecretStr
 
 from .errors import (
     MelodiAuthenticationError,
@@ -42,6 +43,25 @@ class MelodiAsyncClient:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.aclose()
+
+    def update_base_url(self, new_url: str) -> str:
+        """Met à jour dynamiquement l'URL de base de MELODI ERP."""
+        clean_url = new_url.strip().rstrip("/")
+        if not clean_url.startswith(("http://", "https://")):
+            raise ValueError("L'URL de MELODI ERP doit débuter par http:// ou https://")
+        self.settings.melodi_base_url = clean_url
+        self._client.base_url = httpx.URL(clean_url)
+        logger.info("URL de base de MELODI ERP mise à jour dynamiquement : %s", clean_url)
+        return clean_url
+
+    def update_api_key(self, new_api_key: str) -> str:
+        """Met à jour dynamiquement la clé secrète de service MELODI."""
+        clean_key = new_api_key.strip()
+        if not clean_key:
+            raise ValueError("La clé API de service MELODI ne peut pas être vide.")
+        self.settings.melodi_api_key = SecretStr(clean_key)
+        logger.info("Clé API interne de service MELODI mise à jour dynamiquement.")
+        return clean_key
 
     def _build_headers(
         self,

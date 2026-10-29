@@ -145,6 +145,24 @@ class MelodiMcpServerApp:
 
         # Ajout du Dashboard d'Administration si activé
         if self.settings.admin_dashboard_enabled:
+            if admin_db is None:
+                from melodi_mcp_server.admin.db import AdminDatabase
+                admin_db = AdminDatabase(self.settings.admin_db_path)
+
+            saved_url = admin_db.get_config("melodi_base_url")
+            if saved_url:
+                try:
+                    self.client.update_base_url(saved_url)
+                except Exception as e:
+                    logger.warning("Impossible d'appliquer l'URL persistée '%s' : %s", saved_url, e)
+
+            saved_key = admin_db.get_config("melodi_api_key")
+            if saved_key:
+                try:
+                    self.client.update_api_key(saved_key)
+                except Exception as e:
+                    logger.warning("Impossible d'appliquer la clé API persistée : %s", e)
+
             admin_routes = create_admin_routes(
                 self.registry,
                 self.health_checker,

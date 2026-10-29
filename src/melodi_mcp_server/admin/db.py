@@ -71,6 +71,15 @@ class AdminDatabase:
                 );
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS system_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
             conn.commit()
 
     @staticmethod
@@ -360,3 +369,34 @@ class AdminDatabase:
             conn.execute("DELETE FROM admin_users WHERE id = ?;", (user_id,))
             conn.commit()
             return True
+
+    # --- Gestion de la Configuration Système Persistée ---
+
+    def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Récupère une valeur de configuration système persistée."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute("SELECT value FROM system_config WHERE key = ?;", (key,))
+            row = cursor.fetchone()
+            return row["value"] if row else default
+
+    def set_config(self, key: str, value: str) -> None:
+        """Enregistre ou met à jour une valeur de configuration système."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO system_config (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at;
+                """,
+                (key, str(value).strip(), now),
+            )
+            conn.commit()
+
+    def get_all_configs(self) -> Dict[str, str]:
+        """Retourne l'ensemble des clés/valeurs de configuration."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute("SELECT key, value FROM system_config;")
+            return {row["key"]: row["value"] for row in cursor.fetchall()}
