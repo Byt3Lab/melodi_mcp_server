@@ -65,6 +65,7 @@ class MelodiAsyncClient:
 
         if user_key:
             headers["X-User-MCP-Key"] = str(user_key)
+            headers["X-MCP-User-Key"] = str(user_key)
         if user_id:
             headers["X-Melodi-User-ID"] = str(user_id)
         if org_id:
@@ -232,6 +233,8 @@ class MelodiAsyncClient:
                 "client": "melodi_mcp_server",
                 "user_id": user_id,
                 "org_id": org_id,
+                "user_key": user_key,
+                "user_token": user_key,
             },
         }
         return await self._request(

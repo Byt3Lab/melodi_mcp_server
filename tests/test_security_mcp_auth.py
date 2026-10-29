@@ -87,14 +87,21 @@ async def test_mcp_auth_enforced_when_configured(auth_settings, sample_catalog_p
         r_root_unauth = client.post("/", json=init_payload)
         assert r_root_unauth.status_code == 401
 
-        # 4. Requête avec un autre en-tête (ex: Authorization Bearer) -> 401 (rejeté car seul X-MCP-API-KEY est accepté)
+        # 4. Requête avec Bearer invalide -> 401
         r_bearer = client.post(
+            "/mcp",
+            headers={"Authorization": "Bearer mauvaise-cle-invalide"},
+            json=init_payload,
+        )
+        assert r_bearer.status_code == 401
+
+        # 4b. Requête avec Bearer valide -> 200
+        r_bearer_ok = client.post(
             "/mcp",
             headers={"Authorization": "Bearer test-secret-token-xyz"},
             json=init_payload,
         )
-        assert r_bearer.status_code == 401
-        assert "X-MCP-API-KEY" in r_bearer.headers.get("WWW-Authenticate", "")
+        assert r_bearer_ok.status_code == 200
 
         # 5. Requête avec X-MCP-API-KEY invalide -> 401
         r_bad_key = client.post(

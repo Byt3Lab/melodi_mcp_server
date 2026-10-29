@@ -84,6 +84,7 @@ class ToolDispatcher:
 
             # 5. Appel asynchrone à MELODI avec timeout dédié à l'outil
             timeout = tool.timeout_seconds or self.settings.melodi_timeout_seconds
+            user_key = getattr(sec_context, "user_key", None)
             try:
                 raw_response = await asyncio.wait_for(
                     self.client.execute_tool(
@@ -92,6 +93,7 @@ class ToolDispatcher:
                         correlation_id=call_id,
                         user_id=sec_context.user_id,
                         org_id=sec_context.org_id,
+                        user_key=user_key,
                         call_id=call_id,
                     ),
                     timeout=timeout,
@@ -116,6 +118,47 @@ class ToolDispatcher:
             return CallToolResult(
                 content=[TextContent(type="text", text=output_text)],
                 isError=False,
+            )
+
+        except MelodiAuthenticationError as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self.metrics.record_call(
+                call_id=call_id,
+                tool_name=tool_name,
+                duration_ms=duration_ms,
+                success=False,
+                error_code="MelodiAuthenticationError",
+                error_message=e.message,
+            )
+            logger.warning("Échec d'authentification pour l'outil '%s' : %s", tool_name, e.message)
+            msg = (
+                "[MelodiAuthenticationError] Action refusée par MELODI : Votre jeton personnel MCP est manquant, invalide ou a expiré. "
+                "Veuillez vous rendre sur MELODI ERP dans 'Mes Tokens MCP' (/admin/melodi_mcp/keys) "
+                "pour générer un nouveau token et mettre à jour la configuration de votre agent."
+            )
+            return CallToolResult(
+                content=[TextContent(type="text", text=msg)],
+                isError=True,
+            )
+
+        except MelodiAuthorizationError as e:
+            duration_ms = (time.time() - start_time) * 1000
+            self.metrics.record_call(
+                call_id=call_id,
+                tool_name=tool_name,
+                duration_ms=duration_ms,
+                success=False,
+                error_code="MelodiAuthorizationError",
+                error_message=e.message,
+            )
+            logger.warning("Droits insuffisants pour l'outil '%s' : %s", tool_name, e.message)
+            msg = (
+                f"[MelodiAuthorizationError] Droits insuffisants : Votre compte utilisateur ne possède pas les permissions nécessaires "
+                f"dans MELODI ERP pour exécuter l'outil '{tool_name}'."
+            )
+            return CallToolResult(
+                content=[TextContent(type="text", text=msg)],
+                isError=True,
             )
 
         except MelodiMcpError as e:

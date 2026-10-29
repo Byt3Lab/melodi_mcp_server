@@ -1,18 +1,21 @@
 """Contrôles de sécurité locaux, gestion du contexte et sanitisation."""
 
+import hmac
 import json
 import logging
+from contextvars import ContextVar
 from typing import Any, Optional
+from urllib.parse import parse_qs
 import jsonschema
+from starlette.responses import Response
 
 from .errors import ToolValidationError
 from .settings import Settings, get_settings
 
-import hmac
-from urllib.parse import parse_qs
-from starlette.responses import Response
-
 logger = logging.getLogger(__name__)
+
+# Variable de contexte asynchrone stockant le token utilisateur de la requête en cours
+current_user_token: ContextVar[Optional[str]] = ContextVar("current_user_token", default=None)
 
 
 class SecurityContext:
@@ -23,12 +26,14 @@ class SecurityContext:
         client_id: Optional[str] = None,
         user_id: Optional[str] = None,
         org_id: Optional[str] = None,
+        user_key: Optional[str] = None,
         is_authenticated: bool = False,
     ):
         self.client_id = client_id or "mcp_client"
         self.user_id = user_id if is_authenticated else None
         self.org_id = org_id if is_authenticated else None
-        self.is_authenticated = is_authenticated
+        self.user_key = user_key
+        self.is_authenticated = is_authenticated or bool(user_key)
 
 
 def validate_payload_size(data: Any, max_bytes: int) -> None:
@@ -80,10 +85,11 @@ def sanitize_result_for_logging(data: Any) -> Any:
 
 
 class McpAuthMiddleware:
-    """Protège les points de terminaison du protocole MCP contre les accès non autorisés.
+    """Intercepte les requêtes MCP pour extraire le jeton d'authentification utilisateur
 
-    Exige un jeton d'authentification valide via l'en-tête exclusif 'X-MCP-API-KEY'
-    lorsque `mcp_api_key` est configuré.
+    (Bearer, X-User-MCP-Key, etc.) et l'injecter dans un ContextVar pour transmission
+    transparente vers MELODI ERP. Si une clé globale `mcp_api_key` est configurée,
+    l'accès anonyme sans token est rejeté.
     """
 
     def __init__(
@@ -97,12 +103,12 @@ class McpAuthMiddleware:
         self.admin_prefix = admin_prefix
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if not self.api_key or scope["type"] != "http":
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
         path = scope.get("path", "")
-        # Les routes MCP à protéger incluent /mcp, /sse et la racine /
+        # Les routes MCP à traiter incluent /mcp, /sse et la racine /
         is_mcp_path = path in ("/mcp", "/sse", "/") or path.startswith("/mcp/") or path.startswith("/sse/")
 
         if path == "/":
@@ -113,43 +119,65 @@ class McpAuthMiddleware:
                 await self.app(scope, receive, send)
                 return
 
+        token: Optional[str] = None
         if is_mcp_path:
             headers = dict(scope.get("headers", []))
-            # Extraction de la clé d'API via l'en-tête X-MCP-API-KEY ou le paramètre d'URL ?mcp_api_key=...
-            token = headers.get(b"x-mcp-api-key", b"").decode("latin1", errors="ignore").strip()
 
+            # 1. Extraction Bearer token
+            auth_val = headers.get(b"authorization", b"").decode("latin1", errors="ignore").strip()
+            if auth_val.lower().startswith("bearer "):
+                token = auth_val[7:].strip()
+
+            # 2. Extraction en-têtes spécifiques
+            if not token:
+                for h_name in (b"x-user-mcp-key", b"x-mcp-user-key", b"x-mcp-api-key", b"x-api-key"):
+                    val = headers.get(h_name, b"").decode("latin1", errors="ignore").strip()
+                    if val:
+                        token = val
+                        break
+
+            # 3. Extraction paramètres d'URL (query string)
             if not token:
                 qs = scope.get("query_string", b"").decode("latin1", errors="ignore")
                 if qs:
                     params = parse_qs(qs)
-                    param_val = params.get("mcp_api_key", [None])[0]
-                    if param_val:
-                        token = param_val.strip()
+                    for q_name in ("token", "user_key", "mcp_api_key", "api_key"):
+                        param_val = params.get(q_name, [None])[0]
+                        if param_val:
+                            token = param_val.strip()
+                            break
 
-            if not token or not hmac.compare_digest(token, self.api_key):
-                logger.warning(
-                    "Tentative d'accès MCP non autorisé sur %s (en-tête X-MCP-API-KEY ou paramètre ?mcp_api_key= absent ou invalide)",
-                    path,
-                )
-                error_body = json.dumps({
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {
-                        "code": -32000,
-                        "message": (
-                            "Unauthorized: Clé API MCP absente ou invalide. "
-                            "Fournissez l'en-tête 'X-MCP-API-KEY: <clé>' ou le paramètre d'URL '?mcp_api_key=<clé>'."
-                        ),
-                    },
-                }).encode("utf-8")
+            # Si une clé statique d'infrastructure self.api_key est configurée, elle doit être respectée
+            if self.api_key:
+                if not token or not hmac.compare_digest(token, self.api_key):
+                    logger.warning(
+                        "Tentative d'accès MCP non autorisé sur %s (jeton d'authentification absent ou invalide)",
+                        path,
+                    )
+                    error_body = json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": -32000,
+                            "message": (
+                                "Unauthorized: Jeton d'authentification MCP manquant ou invalide. "
+                                "Fournissez l'en-tête 'Authorization: Bearer <token>' ou 'X-MCP-API-KEY: <clé>'."
+                            ),
+                        },
+                    }).encode("utf-8")
 
-                response = Response(
-                    content=error_body,
-                    status_code=401,
-                    media_type="application/json",
-                    headers={"WWW-Authenticate": 'ApiKey realm="MELODI MCP", header="X-MCP-API-KEY"'},
-                )
-                await response(scope, receive, send)
-                return
+                    response = Response(
+                        content=error_body,
+                        status_code=401,
+                        media_type="application/json",
+                        headers={"WWW-Authenticate": 'ApiKey realm="MELODI MCP", header="X-MCP-API-KEY"'},
+                    )
+                    await response(scope, receive, send)
+                    return
 
-        await self.app(scope, receive, send)
+        # Positionner le jeton utilisateur dans la variable de contexte pour la durée de la requête
+        ctx_token = current_user_token.set(token)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            current_user_token.reset(ctx_token)

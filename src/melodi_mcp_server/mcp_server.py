@@ -16,7 +16,7 @@ import mcp.types as types
 from .admin.routes import create_admin_routes
 from .health import HealthChecker
 from .melodi_client import MelodiAsyncClient
-from .security import McpAuthMiddleware
+from .security import McpAuthMiddleware, SecurityContext, current_user_token
 from .settings import Settings, get_settings
 from .tool_dispatcher import ToolDispatcher
 from .tool_registry import DynamicToolRegistry
@@ -77,7 +77,12 @@ class MelodiMcpServerApp:
             ctx: Any, req: types.CallToolRequestParams
         ) -> types.CallToolResult:
             args = req.arguments or {}
-            result = await self.dispatcher.execute_tool(req.name, args)
+            token = current_user_token.get()
+            sec_context = SecurityContext(
+                user_key=token,
+                is_authenticated=bool(token),
+            )
+            result = await self.dispatcher.execute_tool(req.name, args, context=sec_context)
             return result
 
         self.server.add_request_handler("tools/list", types.PaginatedRequestParams, handle_list_tools)
@@ -168,16 +173,17 @@ class MelodiMcpServerApp:
             finally:
                 await self.shutdown()
 
-        middleware = []
         api_key_str = self.settings.mcp_api_key.get_secret_value() if self.settings.mcp_api_key else None
-        if api_key_str:
-            middleware.append(
-                Middleware(
-                    McpAuthMiddleware,
-                    api_key=api_key_str,
-                    admin_prefix=self.settings.admin_prefix,
-                )
+        middleware = [
+            Middleware(
+                McpAuthMiddleware,
+                api_key=api_key_str,
+                admin_prefix=self.settings.admin_prefix,
             )
-            logger.info("Authentification MCP activée (clé requise pour /mcp, / et /sse).")
+        ]
+        if api_key_str:
+            logger.info("Authentification MCP restreinte par clé globale (clé requise pour /mcp, / et /sse).")
+        else:
+            logger.info("Relais MCP transparent activé (les jetons utilisateurs Bearer sont propagés vers MELODI).")
 
         return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
