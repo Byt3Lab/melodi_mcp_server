@@ -28,7 +28,7 @@ services:
       - MAX_RESPONSE_SIZE_BYTES=${MAX_RESPONSE_SIZE_BYTES:-5242880}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
-      - ./data:/app/data
+      - melodi_mcp_data:/app/data
     extra_hosts:
       # Permet au conteneur de contacter MELODI ERP s'il tourne sur la machine hôte
       - "host.docker.internal:host-gateway"
@@ -38,3 +38,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+volumes:
+  melodi_mcp_data:
+    name: melodi_mcp_server_data
