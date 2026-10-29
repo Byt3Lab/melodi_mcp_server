@@ -27,6 +27,8 @@ services:
       - MAX_REQUEST_SIZE_BYTES=${MAX_REQUEST_SIZE_BYTES:-1048576}
       - MAX_RESPONSE_SIZE_BYTES=${MAX_RESPONSE_SIZE_BYTES:-5242880}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./data:/app/data
     extra_hosts:
       # Permet au conteneur de contacter MELODI ERP s'il tourne sur la machine hôte
       - "host.docker.internal:host-gateway"

@@ -23,7 +23,8 @@ def mock_settings() -> Settings:
         mcp_transport="stdio",
         admin_dashboard_enabled=True,
         admin_prefix="/admin",
-        admin_api_key=None,
+        admin_api_key=SecretStr("admin"),
+        admin_db_path=":memory:",
         mcp_api_key=None,
         catalog_sync_interval_seconds=10,
     )

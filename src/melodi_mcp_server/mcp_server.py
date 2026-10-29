@@ -114,7 +114,7 @@ class MelodiMcpServerApp:
         finally:
             await self.shutdown()
 
-    def create_http_app(self) -> Starlette:
+    def create_http_app(self, admin_db: Optional[Any] = None) -> Starlette:
         """Crée l'application Web unifiée pour le transport HTTP Streamable / SSE et l'Admin."""
         mcp_app = self.server.streamable_http_app()
 
@@ -144,6 +144,7 @@ class MelodiMcpServerApp:
                 self.registry,
                 self.health_checker,
                 self.settings,
+                db=admin_db,
             )
             routes.extend(admin_routes)
             logger.info(

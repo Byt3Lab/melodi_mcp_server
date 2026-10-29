@@ -81,7 +81,16 @@ class Settings(BaseSettings):
     )
     admin_api_key: Optional[SecretStr] = Field(
         default=SecretStr("admin"),
-        description="Clé d'accès pour sécuriser le dashboard (par défaut: admin)",
+        description="Clé d'amorçage initiale pour créer le premier compte admin (par défaut: admin)",
+    )
+    admin_db_path: str = Field(
+        default="data/admin.db",
+        description="Chemin du fichier de base de données SQLite pour l'administration",
+    )
+    admin_session_ttl_hours: int = Field(
+        default=24,
+        ge=1,
+        description="Durée de validité d'une session administrateur en heures",
     )
 
     # --- Catalogue & Exécution ---

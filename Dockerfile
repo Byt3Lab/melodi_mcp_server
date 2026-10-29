@@ -36,7 +36,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Create non-root user for security
 RUN groupadd -g 1000 appuser && \
-    useradd -u 1000 -g appuser -s /bin/bash -m appuser
+    useradd -u 1000 -g appuser -s /bin/bash -m appuser && \
+    mkdir -p /app/data && \
+    chown -R appuser:appuser /app/data
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv

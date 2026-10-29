@@ -3,6 +3,15 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# SQLite & Persistent Local Data
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
 # C extensions
 *.so
 
