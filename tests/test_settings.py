@@ -47,7 +47,7 @@ def test_02_settings_validation_invalid_values():
 
 def test_02b_configurable_api_prefixes():
     """Test 2b: Normalisation et résolution correcte des préfixes d'API configurables."""
-    default_settings = Settings()
+    default_settings = Settings(_env_file=None)
     assert default_settings.melodi_api_prefix == "/api/melodi_mcp/internal"
     assert default_settings.admin_api_key is not None
     assert default_settings.admin_api_key.get_secret_value() == "admin"

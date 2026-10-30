@@ -119,39 +119,54 @@ class McpAuthMiddleware:
                 await self.app(scope, receive, send)
                 return
 
-        token: Optional[str] = None
+        user_token: Optional[str] = None
         if is_mcp_path:
             headers = dict(scope.get("headers", []))
+            qs = scope.get("query_string", b"").decode("latin1", errors="ignore")
+            params = parse_qs(qs) if qs else {}
 
-            # 1. Extraction Bearer token
-            auth_val = headers.get(b"authorization", b"").decode("latin1", errors="ignore").strip()
-            if auth_val.lower().startswith("bearer "):
-                token = auth_val[7:].strip()
+            # 1. Extraction de la clé d'infrastructure (infra_key)
+            infra_key: Optional[str] = None
+            for h_name in (b"x-mcp-api-key", b"x-api-key"):
+                val = headers.get(h_name, b"").decode("latin1", errors="ignore").strip()
+                if val:
+                    infra_key = val
+                    break
 
-            # 2. Extraction en-têtes spécifiques
-            if not token:
-                for h_name in (b"x-user-mcp-key", b"x-mcp-user-key", b"x-mcp-api-key", b"x-api-key"):
-                    val = headers.get(h_name, b"").decode("latin1", errors="ignore").strip()
-                    if val:
-                        token = val
+            if not infra_key and params:
+                for q_name in ("mcp_api_key", "api_key"):
+                    param_val = params.get(q_name, [None])[0]
+                    if param_val and param_val.strip():
+                        infra_key = param_val.strip()
                         break
 
-            # 3. Extraction paramètres d'URL (query string)
-            if not token:
-                qs = scope.get("query_string", b"").decode("latin1", errors="ignore")
-                if qs:
-                    params = parse_qs(qs)
-                    for q_name in ("token", "user_key", "mcp_api_key", "api_key"):
-                        param_val = params.get(q_name, [None])[0]
-                        if param_val:
-                            token = param_val.strip()
-                            break
+            # 2. Extraction du jeton personnel utilisateur (user_token)
+            auth_val = headers.get(b"authorization", b"").decode("latin1", errors="ignore").strip()
+            if auth_val.lower().startswith("bearer "):
+                bearer_val = auth_val[7:].strip()
+                if bearer_val:
+                    user_token = bearer_val
 
-            # Si une clé statique d'infrastructure self.api_key est configurée, elle doit être respectée
+            if not user_token:
+                for h_name in (b"x-user-mcp-key", b"x-mcp-user-key", b"x-mcp-user-token"):
+                    val = headers.get(h_name, b"").decode("latin1", errors="ignore").strip()
+                    if val:
+                        user_token = val
+                        break
+
+            if not user_token and params:
+                for q_name in ("user_key", "user_token", "token"):
+                    param_val = params.get(q_name, [None])[0]
+                    if param_val and param_val.strip():
+                        user_token = param_val.strip()
+                        break
+
+            # Si une clé statique d'infrastructure self.api_key est configurée, double authentification stricte
             if self.api_key:
-                if not token or not hmac.compare_digest(token, self.api_key):
+                # Étape A : Vérification obligatoire de la clé d'infrastructure
+                if not infra_key or not hmac.compare_digest(infra_key, self.api_key):
                     logger.warning(
-                        "Tentative d'accès MCP non autorisé sur %s (jeton d'authentification absent ou invalide)",
+                        "Tentative d'accès MCP non autorisé sur %s (clé d'infrastructure X-MCP-API-KEY absente ou invalide)",
                         path,
                     )
                     error_body = json.dumps({
@@ -160,8 +175,8 @@ class McpAuthMiddleware:
                         "error": {
                             "code": -32000,
                             "message": (
-                                "Unauthorized: Jeton d'authentification MCP manquant ou invalide. "
-                                "Fournissez l'en-tête 'Authorization: Bearer <token>' ou 'X-MCP-API-KEY: <clé>'."
+                                "Unauthorized: Clé d'infrastructure MCP 'X-MCP-API-KEY' manquante ou invalide. "
+                                "Fournissez l'en-tête 'X-MCP-API-KEY: <clé>'."
                             ),
                         },
                     }).encode("utf-8")
@@ -175,8 +190,35 @@ class McpAuthMiddleware:
                     await response(scope, receive, send)
                     return
 
+                # Étape B : Vérification obligatoire du jeton personnel utilisateur
+                if not user_token:
+                    logger.warning(
+                        "Tentative d'accès MCP sur %s sans jeton utilisateur personnel",
+                        path,
+                    )
+                    error_body = json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": -32000,
+                            "message": (
+                                "Unauthorized: Jeton personnel utilisateur 'Authorization: Bearer <token>' manquant. "
+                                "Fournissez votre token d'agent généré dans MELODI ERP."
+                            ),
+                        },
+                    }).encode("utf-8")
+
+                    response = Response(
+                        content=error_body,
+                        status_code=401,
+                        media_type="application/json",
+                        headers={"WWW-Authenticate": 'Bearer realm="MELODI MCP"'},
+                    )
+                    await response(scope, receive, send)
+                    return
+
         # Positionner le jeton utilisateur dans la variable de contexte pour la durée de la requête
-        ctx_token = current_user_token.set(token)
+        ctx_token = current_user_token.set(user_token)
         try:
             await self.app(scope, receive, send)
         finally:

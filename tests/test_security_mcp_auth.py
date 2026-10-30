@@ -77,81 +77,102 @@ async def test_mcp_auth_enforced_when_configured(auth_settings, sample_catalog_p
         health_json = r_health.json()
         assert health_json["server"]["auth_required"] is True
 
-        # 2. Requête sans authentification sur /mcp -> 401
+        # 2. Requête sans authentification sur /mcp -> 401 (clé infra absente)
         r_unauth = client.post("/mcp", json=init_payload)
         assert r_unauth.status_code == 401
         assert "WWW-Authenticate" in r_unauth.headers
         assert r_unauth.json()["error"]["code"] == -32000
+        assert "X-MCP-API-KEY" in r_unauth.json()["error"]["message"]
 
         # 3. Requête sans authentification sur / -> 401
         r_root_unauth = client.post("/", json=init_payload)
         assert r_root_unauth.status_code == 401
 
-        # 4. Requête avec Bearer invalide -> 401
-        r_bearer = client.post(
+        # 4. Requête avec Bearer user mais sans X-MCP-API-KEY -> 401
+        r_bearer_only = client.post(
             "/mcp",
-            headers={"Authorization": "Bearer mauvaise-cle-invalide"},
+            headers={"Authorization": "Bearer mcp_live_user_token_123"},
             json=init_payload,
         )
-        assert r_bearer.status_code == 401
-
-        # 4b. Requête avec Bearer valide -> 200
-        r_bearer_ok = client.post(
-            "/mcp",
-            headers={"Authorization": "Bearer test-secret-token-xyz"},
-            json=init_payload,
-        )
-        assert r_bearer_ok.status_code == 200
+        assert r_bearer_only.status_code == 401
+        assert "X-MCP-API-KEY" in r_bearer_only.json()["error"]["message"]
 
         # 5. Requête avec X-MCP-API-KEY invalide -> 401
         r_bad_key = client.post(
             "/mcp",
-            headers={"X-MCP-API-KEY": "mauvaise-cle"},
+            headers={
+                "X-MCP-API-KEY": "mauvaise-cle",
+                "Authorization": "Bearer mcp_live_user_token_123",
+            },
             json=init_payload,
         )
         assert r_bad_key.status_code == 401
 
-        # 6. Requête avec X-MCP-API-KEY valide sur /mcp -> 200
-        r_ok_mcp = client.post(
+        # 6. Requête avec X-MCP-API-KEY valide mais sans token utilisateur -> 401
+        r_no_user_token = client.post(
             "/mcp",
             headers={"X-MCP-API-KEY": "test-secret-token-xyz"},
             json=init_payload,
         )
+        assert r_no_user_token.status_code == 401
+        assert "Authorization" in r_no_user_token.json()["error"]["message"]
+
+        # 7. Requête avec double authentification valide sur /mcp -> 200
+        r_ok_mcp = client.post(
+            "/mcp",
+            headers={
+                "X-MCP-API-KEY": "test-secret-token-xyz",
+                "Authorization": "Bearer mcp_live_user_token_123",
+            },
+            json=init_payload,
+        )
         assert r_ok_mcp.status_code == 200
 
-        # 7. Requête avec X-MCP-API-KEY valide sur / -> 200
+        # 8. Requête avec double authentification valide sur / -> 200
         r_ok_root = client.post(
             "/",
-            headers={"X-MCP-API-KEY": "test-secret-token-xyz"},
+            headers={
+                "X-MCP-API-KEY": "test-secret-token-xyz",
+                "Authorization": "Bearer mcp_live_user_token_123",
+            },
             json=init_payload,
         )
         assert r_ok_root.status_code == 200
 
-        # 8. Requête avec X-MCP-API-KEY valide sur /sse -> 200
+        # 9. Requête avec double authentification valide sur /sse -> 200
         r_ok_sse = client.post(
             "/sse",
-            headers={"X-MCP-API-KEY": "test-secret-token-xyz"},
+            headers={
+                "X-MCP-API-KEY": "test-secret-token-xyz",
+                "Authorization": "Bearer mcp_live_user_token_123",
+            },
             json=init_payload,
         )
         assert r_ok_sse.status_code == 200
 
-        # 9. Requête avec paramètre d'URL invalide ?mcp_api_key=mauvais -> 401
+        # 10. Requête avec paramètre d'URL invalide ?mcp_api_key=mauvais -> 401
         r_bad_query = client.post(
             "/mcp?mcp_api_key=mauvaise-cle",
+            headers={"Authorization": "Bearer mcp_live_user_token_123"},
             json=init_payload,
         )
         assert r_bad_query.status_code == 401
 
-        # 10. Requête avec paramètre d'URL valide ?mcp_api_key=... sur /mcp -> 200
+        # 11. Requête avec paramètre d'URL valide ?mcp_api_key=... et Bearer sur /mcp -> 200
         r_ok_query_mcp = client.post(
             "/mcp?mcp_api_key=test-secret-token-xyz",
+            headers={"Authorization": "Bearer mcp_live_user_token_123"},
             json=init_payload,
         )
         assert r_ok_query_mcp.status_code == 200
 
-        # 11. Requête avec paramètre d'URL valide ?mcp_api_key=... sur / -> 200
-        r_ok_query_root = client.post(
-            "/?mcp_api_key=test-secret-token-xyz",
+        # 12. Requête avec en-têtes alternatifs (X-API-KEY + X-User-MCP-Key) sur / -> 200
+        r_ok_alt_headers = client.post(
+            "/",
+            headers={
+                "X-API-KEY": "test-secret-token-xyz",
+                "X-User-MCP-Key": "mcp_live_user_token_123",
+            },
             json=init_payload,
         )
-        assert r_ok_query_root.status_code == 200
+        assert r_ok_alt_headers.status_code == 200
