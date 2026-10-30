@@ -11,7 +11,7 @@ from starlette.routing import Route
 
 from ..health import HealthChecker
 from ..metrics import get_metrics
-from ..settings import Settings
+from ..settings import Settings, normalize_url_path
 from ..tool_registry import DynamicToolRegistry
 from .db import AdminDatabase
 from .templates import DASHBOARD_HTML, LOGIN_HTML, SETUP_HTML
@@ -350,10 +350,16 @@ def create_admin_routes(
         if not test_api_key and settings.melodi_api_key:
             test_api_key = settings.melodi_api_key.get_secret_value()
 
+        test_prefix = body.get("melodi_api_prefix")
+        if test_prefix is not None:
+            clean_prefix = normalize_url_path(str(test_prefix))
+        else:
+            clean_prefix = settings.melodi_api_prefix
+
         import time
         import httpx
 
-        test_health_url = f"{raw_url}{settings.melodi_api_prefix}/health"
+        test_health_url = f"{raw_url}{clean_prefix}/health"
         start_t = time.time()
         try:
             async with httpx.AsyncClient(timeout=5.0, verify=settings.melodi_verify_ssl) as test_client:
@@ -369,7 +375,7 @@ def create_admin_routes(
                         "success": True,
                         "status_code": resp.status_code,
                         "latency_ms": latency_ms,
-                        "message": f"Connexion réussie vers {raw_url} (HTTP 200, {latency_ms}ms)",
+                        "message": f"Connexion réussie vers {raw_url}{clean_prefix} (HTTP 200, {latency_ms}ms)",
                     })
                 else:
                     return JSONResponse({
@@ -383,11 +389,11 @@ def create_admin_routes(
             return JSONResponse({
                 "success": False,
                 "latency_ms": latency_ms,
-                "error": f"Impossible de joindre {raw_url} : {e}",
+                "error": f"Impossible de joindre {raw_url}{clean_prefix} : {e}",
             }, status_code=400)
 
     async def update_config_api(request: Request) -> JSONResponse:
-        """Met à jour l'URL et/ou la clé API de MELODI ERP à chaud et persiste le changement dans SQLite."""
+        """Met à jour l'URL, le préfixe et/ou la clé API de MELODI ERP à chaud et persiste le changement dans SQLite."""
         current_user = _get_current_user(request)
         if not current_user:
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -397,6 +403,7 @@ def create_admin_routes(
         body = await _parse_body(request)
         raw_url = (body.get("melodi_base_url") or "").strip().rstrip("/")
         new_key = (body.get("melodi_api_key") or "").strip()
+        raw_prefix = body.get("melodi_api_prefix")
 
         if raw_url and not raw_url.startswith(("http://", "https://")):
             return JSONResponse(
@@ -418,13 +425,19 @@ def create_admin_routes(
                 database.set_config("melodi_api_key", new_key)
                 updated_items.append("Clé API")
 
+            # 3. Mise à jour du préfixe API MCP si fourni
+            if raw_prefix is not None:
+                new_prefix = registry.client.update_api_prefix(str(raw_prefix))
+                database.set_config("melodi_api_prefix", new_prefix)
+                updated_items.append("Préfixe API")
+
             if not updated_items:
                 return JSONResponse(
-                    {"success": False, "error": "Aucune modification demandée (URL ou clé API)."},
+                    {"success": False, "error": "Aucune modification demandée (URL, préfixe ou clé API)."},
                     status_code=400,
                 )
 
-            # 3. Synchronisation immédiate avec l'instance MELODI
+            # 4. Synchronisation immédiate avec l'instance MELODI
             try:
                 count = await registry.sync_now(force=True)
             except Exception as sync_err:
@@ -433,10 +446,17 @@ def create_admin_routes(
 
             health_data = await health_checker.check()
 
-            items_str = " et ".join(updated_items)
+            if len(updated_items) == 1:
+                items_str = updated_items[0]
+            elif len(updated_items) == 2:
+                items_str = f"{updated_items[0]} et {updated_items[1]}"
+            else:
+                items_str = f"{', '.join(updated_items[:-1])} et {updated_items[-1]}"
+
             return JSONResponse({
                 "success": True,
                 "melodi_base_url": settings.melodi_base_url,
+                "melodi_api_prefix": settings.melodi_api_prefix,
                 "has_melodi_api_key": bool(settings.melodi_api_key and settings.melodi_api_key.get_secret_value()),
                 "tools_count": count,
                 "health": health_data,

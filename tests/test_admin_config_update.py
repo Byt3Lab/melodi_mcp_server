@@ -31,6 +31,12 @@ async def test_admin_db_system_config_persistence():
     assert db.get_config("melodi_api_key") == "secret-test-key-1234"
     assert db.get_all_configs()["melodi_api_key"] == "secret-test-key-1234"
 
+    # Préfixe API
+    assert db.get_config("melodi_api_prefix") is None
+    db.set_config("melodi_api_prefix", "/api/v2/custom")
+    assert db.get_config("melodi_api_prefix") == "/api/v2/custom"
+    assert db.get_all_configs()["melodi_api_prefix"] == "/api/v2/custom"
+
 
 @pytest.mark.asyncio
 @respx.mock
@@ -43,11 +49,11 @@ async def test_admin_config_api_get_and_update(mock_settings, sample_catalog_pay
         status_code=200, json={"status": "healthy"}
     )
 
-    # Nouveaux mocks pour la nouvelle URL
-    respx.get("http://new-erp-host:5000/api/melodi_mcp/internal/health").respond(
+    # Nouveaux mocks pour la nouvelle URL et le nouveau préfixe
+    respx.get("http://new-erp-host:5000/api/melodi_custom/health").respond(
         status_code=200, json={"status": "healthy"}
     )
-    respx.get("http://new-erp-host:5000/api/melodi_mcp/internal/tools").respond(
+    respx.get("http://new-erp-host:5000/api/melodi_custom/tools").respond(
         status_code=200, json=sample_catalog_payload
     )
 
@@ -72,22 +78,25 @@ async def test_admin_config_api_get_and_update(mock_settings, sample_catalog_pay
         assert cfg_resp.status_code == 200
         data = cfg_resp.json()
         assert data["melodi_base_url"] == "http://test-melodi:8000"
+        assert data["melodi_api_prefix"] == "/api/melodi_mcp/internal"
         assert data["has_melodi_api_key"] is True
         assert data["melodi_api_key_preview"].startswith("supe")
         assert "••••" in data["melodi_api_key_preview"]
 
-        # 3. Test de connectivité vers la nouvelle URL et avec une nouvelle clé
+        # 3. Test de connectivité vers la nouvelle URL et avec une nouvelle clé et préfixe personnalisé
         test_resp = await client.post(
             "/admin/api/config/test",
             headers=headers,
             json={
                 "melodi_base_url": "http://new-erp-host:5000",
                 "melodi_api_key": "new-secret-token-xyz",
+                "melodi_api_prefix": "/api/melodi_custom",
             },
         )
         assert test_resp.status_code == 200
         assert test_resp.json()["success"] is True
         assert "Connexion réussie" in test_resp.json()["message"]
+        assert "http://new-erp-host:5000/api/melodi_custom" in test_resp.json()["message"]
 
         # 4. Rejet d'une URL invalide
         bad_resp = await client.post(
@@ -97,28 +106,32 @@ async def test_admin_config_api_get_and_update(mock_settings, sample_catalog_pay
         )
         assert bad_resp.status_code == 400
 
-        # 5. Application de la nouvelle URL et de la nouvelle clé d'API
+        # 5. Application de la nouvelle URL, de la nouvelle clé d'API et du nouveau préfixe
         up_resp = await client.post(
             "/admin/api/config",
             headers=headers,
             json={
                 "melodi_base_url": "http://new-erp-host:5000",
                 "melodi_api_key": "new-secret-token-xyz",
+                "melodi_api_prefix": "api/melodi_custom/",
             },
         )
         assert up_resp.status_code == 200
         assert up_resp.json()["success"] is True
         assert up_resp.json()["melodi_base_url"] == "http://new-erp-host:5000"
+        assert up_resp.json()["melodi_api_prefix"] == "/api/melodi_custom"
         assert up_resp.json()["has_melodi_api_key"] is True
 
-        # Vérifier que le client en mémoire utilise bien la nouvelle URL et la nouvelle clé
+        # Vérifier que le client en mémoire utilise bien la nouvelle URL, clé et préfixe
         assert str(app.client._client.base_url).rstrip("/") == "http://new-erp-host:5000"
         assert app.settings.melodi_base_url == "http://new-erp-host:5000"
         assert app.settings.melodi_api_key.get_secret_value() == "new-secret-token-xyz"
+        assert app.settings.melodi_api_prefix == "/api/melodi_custom"
 
         # Vérifier la persistance dans la base SQLite
         assert admin_db.get_config("melodi_base_url") == "http://new-erp-host:5000"
         assert admin_db.get_config("melodi_api_key") == "new-secret-token-xyz"
+        assert admin_db.get_config("melodi_api_prefix") == "/api/melodi_custom"
 
     await app.shutdown()
 
@@ -126,25 +139,27 @@ async def test_admin_config_api_get_and_update(mock_settings, sample_catalog_pay
 @pytest.mark.asyncio
 @respx.mock
 async def test_restoration_of_persisted_url_on_startup(mock_settings, sample_catalog_payload):
-    """Vérifie qu'un redémarrage du serveur restaure automatiquement l'URL et la clé configurées en base."""
-    respx.get("https://restored-melodi:443/api/melodi_mcp/internal/health").respond(
+    """Vérifie qu'un redémarrage du serveur restaure automatiquement l'URL, la clé et le préfixe configurés en base."""
+    respx.get("https://restored-melodi:443/custom_prefix/health").respond(
         status_code=200, json={"status": "healthy"}
     )
-    respx.get("https://restored-melodi:443/api/melodi_mcp/internal/tools").respond(
+    respx.get("https://restored-melodi:443/custom_prefix/tools").respond(
         status_code=200, json=sample_catalog_payload
     )
 
     admin_db = AdminDatabase(":memory:")
-    # Pré-configurer une URL et une clé personnalisées dans la base
+    # Pré-configurer une URL, une clé et un préfixe personnalisés dans la base
     admin_db.set_config("melodi_base_url", "https://restored-melodi")
     admin_db.set_config("melodi_api_key", "restored-super-key")
+    admin_db.set_config("melodi_api_prefix", "/custom_prefix")
 
     new_app = MelodiMcpServerApp(settings=mock_settings)
     new_http_app = new_app.create_http_app(admin_db=admin_db)
 
-    # Vérification que l'URL et la clé ont été immédiatement restaurées
+    # Vérification que l'URL, la clé et le préfixe ont été immédiatement restaurés
     assert str(new_app.client._client.base_url).rstrip("/") == "https://restored-melodi"
     assert new_app.settings.melodi_base_url == "https://restored-melodi"
     assert new_app.settings.melodi_api_key.get_secret_value() == "restored-super-key"
+    assert new_app.settings.melodi_api_prefix == "/custom_prefix"
 
     await new_app.shutdown()

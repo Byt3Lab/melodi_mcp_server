@@ -99,3 +99,20 @@ async def test_melodi_client_handles_auth_error_and_404(mock_settings):
             await client.get_health()
         with pytest.raises(ToolNotFoundError):
             await client.get_tools()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_melodi_client_update_api_prefix(mock_settings):
+    """Vérifie la mise à jour dynamique du préfixe de route d'API de MELODI ERP."""
+    respx.get("http://test-melodi:8000/api/custom_v3/health").respond(
+        status_code=200, json={"status": "healthy"}
+    )
+
+    async with MelodiAsyncClient(mock_settings) as client:
+        new_prefix = client.update_api_prefix("api/custom_v3/")
+        assert new_prefix == "/api/custom_v3"
+        assert client.settings.melodi_api_prefix == "/api/custom_v3"
+
+        health = await client.get_health()
+        assert health["status"] == "healthy"

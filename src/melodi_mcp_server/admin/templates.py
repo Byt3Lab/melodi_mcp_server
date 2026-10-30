@@ -459,8 +459,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     </div>
 
                     <div class="form-group">
-                        <label for="cfg-api-prefix">Préfixe API MCP (Lecture seule)</label>
-                        <input type="text" id="cfg-api-prefix" readonly style="opacity: 0.7; background: rgba(0,0,0,0.25);">
+                        <label for="cfg-api-prefix">Préfixe API MCP (MELODI_API_PREFIX)</label>
+                        <input type="text" id="cfg-api-prefix" placeholder="ex: /api/melodi_mcp/internal ou /api/melodi_mcp">
+                        <span id="cfg-api-prefix-hint" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
+                            Préfixe des routes de l'API interne dans MELODI ERP (par défaut : <code>/api/melodi_mcp/internal</code>).
+                        </span>
                     </div>
 
                     <div style="display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap;">
@@ -905,6 +908,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         async function handleTestConfig() {
             const url = document.getElementById('cfg-melodi-url').value.trim();
             const key = document.getElementById('cfg-melodi-key').value.trim();
+            const prefix = document.getElementById('cfg-api-prefix').value.trim();
             const alertBox = document.getElementById('config-alert');
             const btn = document.getElementById('btn-test-config');
             alertBox.style.display = 'none';
@@ -922,6 +926,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const payload = { melodi_base_url: url };
             if (key) {
                 payload.melodi_api_key = key;
+            }
+            if (prefix !== '') {
+                payload.melodi_api_prefix = prefix;
             }
 
             try {
@@ -954,6 +961,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             e.preventDefault();
             const url = document.getElementById('cfg-melodi-url').value.trim();
             const key = document.getElementById('cfg-melodi-key').value.trim();
+            const prefix = document.getElementById('cfg-api-prefix').value.trim();
             const alertBox = document.getElementById('config-alert');
             const btn = document.getElementById('btn-save-config');
             alertBox.style.display = 'none';
@@ -964,6 +972,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const payload = {};
             if (url) payload.melodi_base_url = url;
             if (key) payload.melodi_api_key = key;
+            if (prefix !== undefined && prefix !== null) payload.melodi_api_prefix = prefix;
 
             try {
                 const res = await fetch(apiBase + '/api/config', {

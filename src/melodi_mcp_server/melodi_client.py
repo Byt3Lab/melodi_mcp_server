@@ -15,7 +15,7 @@ from .errors import (
     ToolExecutionError,
     ToolNotFoundError,
 )
-from .settings import Settings, get_settings
+from .settings import Settings, get_settings, normalize_url_path
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,13 @@ class MelodiAsyncClient:
         self.settings.melodi_api_key = SecretStr(clean_key)
         logger.info("Clé API interne de service MELODI mise à jour dynamiquement.")
         return clean_key
+
+    def update_api_prefix(self, new_prefix: str) -> str:
+        """Met à jour dynamiquement le préfixe de l'API MCP de MELODI ERP."""
+        clean_prefix = normalize_url_path(new_prefix)
+        self.settings.melodi_api_prefix = clean_prefix
+        logger.info("Préfixe d'API MCP MELODI mis à jour dynamiquement : '%s'", clean_prefix)
+        return clean_prefix
 
     def _build_headers(
         self,

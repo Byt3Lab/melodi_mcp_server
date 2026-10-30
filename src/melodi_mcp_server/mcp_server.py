@@ -163,6 +163,13 @@ class MelodiMcpServerApp:
                 except Exception as e:
                     logger.warning("Impossible d'appliquer la clé API persistée : %s", e)
 
+            saved_prefix = admin_db.get_config("melodi_api_prefix")
+            if saved_prefix is not None:
+                try:
+                    self.client.update_api_prefix(saved_prefix)
+                except Exception as e:
+                    logger.warning("Impossible d'appliquer le préfixe API persisté '%s' : %s", saved_prefix, e)
+
             admin_routes = create_admin_routes(
                 self.registry,
                 self.health_checker,
