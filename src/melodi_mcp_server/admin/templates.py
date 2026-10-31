@@ -353,6 +353,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="tabs">
             <button class="tab-btn active" onclick="switchTab('tools')">🛠️ Catalogue des Outils</button>
             <button class="tab-btn" onclick="switchTab('history')">📜 Historique des Appels</button>
+            <button class="tab-btn" id="tab-btn-tokens" onclick="switchTab('tokens')">🛡️ Révocations & Tokens</button>
             <button class="tab-btn" id="tab-btn-users" onclick="switchTab('users')">👥 Gestion des Utilisateurs</button>
             <button class="tab-btn" id="tab-btn-config" onclick="switchTab('config')">⚙️ Configuration ERP</button>
         </div>
@@ -429,19 +430,23 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- TAB 4 : Configuration ERP -->
+        <!-- TAB 4 : Configuration ERP & Sécurité MCP -->
         <div id="pane-config" class="tab-pane">
             <div class="section-header">
-                <div class="section-title">Liaison avec le Serveur MELODI ERP</div>
+                <div class="section-title">Liaison ERP & Authentification MCP</div>
             </div>
-            <div class="card" style="max-width: 680px;">
+            <div class="card" style="max-width: 720px;">
                 <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px;">
-                    Configurez l'adresse réseau de votre instance MELODI ERP. Le changement est immédiatement pris en compte par la passerelle MCP et persisté dans la base SQLite.
+                    Configurez l'adresse réseau de votre instance MELODI ERP ainsi que les clés de cryptage et d'infrastructure pour l'authentification unifiée par jeton JWT. Les modifications sont appliquées immédiatement et persistées dans SQLite.
                 </p>
 
                 <div id="config-alert" class="alert" style="display: none; margin-bottom: 16px;"></div>
 
                 <form onsubmit="handleSaveConfig(event)">
+                    <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 12px; color: var(--accent-color);">
+                        🌐 Connexion à MELODI ERP
+                    </div>
+
                     <div class="form-group">
                         <label for="cfg-melodi-url">URL Racine du Serveur MELODI ERP *</label>
                         <input type="url" id="cfg-melodi-url" required placeholder="ex: http://localhost:5000 ou http://host.docker.internal:5000">
@@ -466,15 +471,90 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         </span>
                     </div>
 
+                    <hr style="border: none; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+                    <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 12px; color: var(--accent-color);">
+                        🔐 Sécurité des Clients MCP (Authentification Unique JWT)
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cfg-jwt-secret">Clé Secrète de Chiffrement/Signature JWT (JWT_SECRET) *</label>
+                        <input type="password" id="cfg-jwt-secret" autocomplete="new-password" placeholder="•••••••• (Laissez vide pour conserver la clé actuelle)">
+                        <span id="cfg-jwt-secret-hint" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
+                            Clé secrète HMAC-SHA256 (HS256) partagée avec le module MCP de MELODI ERP pour signer et vérifier les jetons.
+                        </span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cfg-mcp-key">Clé MCP API Infrastructure (MCP_API_KEY)</label>
+                        <input type="password" id="cfg-mcp-key" autocomplete="new-password" placeholder="•••••••• (Laissez vide pour conserver la clé actuelle)">
+                        <span id="cfg-mcp-key-hint" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
+                            Clé d'infrastructure validée à l'intérieur du JWT sous la revendication <code>mcp_api_key</code>.
+                        </span>
+                    </div>
+
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; margin-top: 16px;">
+                        <div style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px;">ℹ️ Connexion Client avec En-tête Unique Authorization</div>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 6px 0;">
+                            Les clients MCP (Claude Desktop, Cursor, extensions) envoient uniquement :<br>
+                            <code>Authorization: Bearer &lt;token_jwt&gt;</code>
+                        </p>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">
+                            Le token généré dans le module MCP de MELODI ERP doit contenir :<br>
+                            <code>{"mcp_api_key": "&lt;clé_infra&gt;", "user_id": "&lt;identifiant_utilisateur&gt;"}</code>
+                        </p>
+                    </div>
+
                     <div style="display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap;">
                         <button type="button" id="btn-test-config" class="btn btn-outline" onclick="handleTestConfig()">
-                            🔍 Tester la Connexion
+                            🔍 Tester la Connexion ERP
                         </button>
                         <button type="submit" id="btn-save-config" class="btn">
                             💾 Enregistrer & Appliquer
                         </button>
                     </div>
                 </form>
+            </div>
+        </div>
+
+        <!-- TAB 5 : Révocations & Tokens MCP -->
+        <div id="pane-tokens" class="tab-pane">
+            <div class="section-header">
+                <div class="section-title">🛡️ Jetons MCP & Révocations</div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-outline" onclick="openModal('modal-revoke-token')">
+                        🚫 Révoquer un Jeton
+                    </button>
+                    <button class="btn" id="btn-cleanup-tokens" onclick="handleCleanupTokens()">
+                        🧹 Purger les tokens expirés (> 72h)
+                    </button>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 20px;">
+                <p style="font-size: 0.9rem; color: var(--text-muted); margin: 0 0 8px 0;">
+                    Les jetons JWT révoqués par MELODI ERP ou manuellement sont listés ici. Tout client MCP tentant d'utiliser un jeton révoqué est bloqué immédiatement.
+                </p>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">
+                    💡 Les jetons ayant une durée de validité maximale de 72h, les entrées révoquées de plus de 72 heures peuvent être purgées en toute sécurité (exécuté au démarrage ou via le bouton ci-dessus).
+                </p>
+            </div>
+
+            <div class="card" style="padding: 0; overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Token ID</th>
+                            <th>User ID</th>
+                            <th>Date de Révocation</th>
+                            <th>Raison</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="revoked-tokens-table-body">
+                        <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">Chargement des tokens révoqués...</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -519,6 +599,32 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- Modal Révocation d'un jeton MCP -->
+    <div id="modal-revoke-token" class="modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal('modal-revoke-token')">&times;</button>
+            <h2 style="margin-bottom: 16px; font-size: 1.25rem;">Révoquer un Jeton JWT MCP</h2>
+            <form onsubmit="handleManualRevoke(event)">
+                <div class="form-group">
+                    <label for="revoke-token-id">Identifiant Unique du Jeton (token_id) *</label>
+                    <input type="text" id="revoke-token-id" required placeholder="ex: tok_live_abc123">
+                </div>
+                <div class="form-group">
+                    <label for="revoke-user-id">Identifiant Utilisateur (user_id optionnel)</label>
+                    <input type="text" id="revoke-user-id" placeholder="ex: 12 ou alice">
+                </div>
+                <div class="form-group">
+                    <label for="revoke-reason">Motif de la révocation</label>
+                    <input type="text" id="revoke-reason" placeholder="ex: Révocation manuelle administrateur">
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('modal-revoke-token')">Annuler</button>
+                    <button type="submit" class="btn" style="background: var(--danger-color); border-color: var(--danger-color);">Confirmer la Révocation</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Modal Modification de mot de passe -->
     <div id="modal-password-user" class="modal">
         <div class="modal-content">
@@ -536,6 +642,32 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
                     <button type="button" class="btn btn-outline" onclick="closeModal('modal-password-user')">Annuler</button>
                     <button type="submit" class="btn">Enregistrer</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Révocation d'un jeton MCP -->
+    <div id="modal-revoke-token" class="modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal('modal-revoke-token')">&times;</button>
+            <h2 style="margin-bottom: 16px; font-size: 1.25rem;">Révoquer un Jeton JWT MCP</h2>
+            <form onsubmit="handleManualRevoke(event)">
+                <div class="form-group">
+                    <label for="revoke-token-id">Identifiant Unique du Jeton (token_id) *</label>
+                    <input type="text" id="revoke-token-id" required placeholder="ex: tok_live_abc123">
+                </div>
+                <div class="form-group">
+                    <label for="revoke-user-id">Identifiant Utilisateur (user_id optionnel)</label>
+                    <input type="text" id="revoke-user-id" placeholder="ex: 12 ou alice">
+                </div>
+                <div class="form-group">
+                    <label for="revoke-reason">Motif de la révocation</label>
+                    <input type="text" id="revoke-reason" placeholder="ex: Révocation manuelle administrateur">
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
+                    <button type="button" class="btn btn-outline" onclick="closeModal('modal-revoke-token')">Annuler</button>
+                    <button type="submit" class="btn" style="background: var(--danger-color); border-color: var(--danger-color);">Confirmer la Révocation</button>
                 </div>
             </form>
         </div>
@@ -565,6 +697,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             } else if (tabId === 'history') {
                 document.querySelectorAll('.tab-btn')[1].classList.add('active');
                 document.getElementById('pane-history').classList.add('active');
+            } else if (tabId === 'tokens') {
+                document.getElementById('tab-btn-tokens').classList.add('active');
+                document.getElementById('pane-tokens').classList.add('active');
+                fetchRevokedTokens();
             } else if (tabId === 'users') {
                 document.getElementById('tab-btn-users').classList.add('active');
                 document.getElementById('pane-users').classList.add('active');
@@ -590,6 +726,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 badge.style.display = 'inline-block';
 
                 if (currentUser.role !== 'admin') {
+                    document.getElementById('tab-btn-tokens').style.display = 'none';
                     document.getElementById('tab-btn-users').style.display = 'none';
                     document.getElementById('tab-btn-config').style.display = 'none';
                     document.getElementById('btn-sync').disabled = true;
@@ -754,6 +891,126 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             document.getElementById(id).classList.remove('active');
         }
 
+        function openModal(id) {
+            document.getElementById(id).classList.add('active');
+        }
+
+        async function fetchRevokedTokens() {
+            try {
+                const res = await fetch(apiBase + '/api/tokens/revoked');
+                if (!res.ok) return;
+                const data = await res.json();
+                renderRevokedTokens(data.revoked_tokens || []);
+            } catch (err) {
+                console.error('Erreur chargement tokens révoqués :', err);
+            }
+        }
+
+        function renderRevokedTokens(tokens) {
+            const tbody = document.getElementById('revoked-tokens-table-body');
+            if (!tbody) return;
+            if (!tokens || tokens.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">Aucun jeton révoqué enregistré.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = tokens.map(t => `
+                <tr>
+                    <td><strong class="code">${escapeHtml(t.token_id)}</strong></td>
+                    <td>${t.user_id ? escapeHtml(t.user_id) : '<span style="color: var(--text-muted);">-</span>'}</td>
+                    <td>${t.revoked_at ? new Date(t.revoked_at).toLocaleString() : '-'}</td>
+                    <td style="color: var(--text-muted);">${escapeHtml(t.reason || '-')}</td>
+                    <td>
+                        <button class="btn btn-outline" style="padding: 4px 8px; font-size: 0.75rem;" onclick="handleDeleteRevocation('${escapeHtml(t.token_id)}')">
+                            Débloquer
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function handleManualRevoke(e) {
+            e.preventDefault();
+            const tokenId = document.getElementById('revoke-token-id').value.trim();
+            const userId = document.getElementById('revoke-user-id').value.trim();
+            const reason = document.getElementById('revoke-reason').value.trim();
+
+            if (!tokenId) return;
+
+            try {
+                const res = await fetch(apiBase + '/api/tokens/revoke', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token_id: tokenId,
+                        user_id: userId || null,
+                        reason: reason || 'Révocation manuelle admin'
+                    })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast('Jeton révoqué avec succès');
+                    closeModal('modal-revoke-token');
+                    document.getElementById('revoke-token-id').value = '';
+                    document.getElementById('revoke-user-id').value = '';
+                    document.getElementById('revoke-reason').value = '';
+                    fetchRevokedTokens();
+                } else {
+                    showToast(data.error || 'Erreur lors de la révocation', true);
+                }
+            } catch (err) {
+                showToast('Erreur réseau : ' + err.message, true);
+            }
+        }
+
+        async function handleCleanupTokens() {
+            const btn = document.getElementById('btn-cleanup-tokens');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = '🧹 Purge en cours...';
+            }
+
+            try {
+                const res = await fetch(apiBase + '/api/tokens/cleanup', {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast(data.message || (data.deleted_count + ' jeton(s) purgé(s)'));
+                    fetchRevokedTokens();
+                } else {
+                    showToast(data.error || 'Échec de la purge', true);
+                }
+            } catch (err) {
+                showToast('Erreur réseau : ' + err.message, true);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerText = '🧹 Purger les tokens expirés (> 72h)';
+                }
+            }
+        }
+
+        async function handleDeleteRevocation(tokenId) {
+            if (!confirm('Confirmez-vous la levée de la révocation pour le jeton ' + tokenId + ' ?')) {
+                return;
+            }
+            try {
+                const res = await fetch(apiBase + '/api/tokens/revoked/' + encodeURIComponent(tokenId), {
+                    method: 'DELETE'
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast('Révocation levée');
+                    fetchRevokedTokens();
+                } else {
+                    showToast(data.error || 'Erreur', true);
+                }
+            } catch (err) {
+                showToast('Erreur réseau : ' + err.message, true);
+            }
+        }
+
         async function handleCreateUser(e) {
             e.preventDefault();
             const username = document.getElementById('new-username').value.trim();
@@ -884,6 +1141,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 const keyInput = document.getElementById('cfg-melodi-key');
                 const keyHint = document.getElementById('cfg-melodi-key-hint');
                 const prefixInput = document.getElementById('cfg-api-prefix');
+                const jwtSecretInput = document.getElementById('cfg-jwt-secret');
+                const jwtSecretHint = document.getElementById('cfg-jwt-secret-hint');
+                const mcpKeyInput = document.getElementById('cfg-mcp-key');
+                const mcpKeyHint = document.getElementById('cfg-mcp-key-hint');
                 const erpUrlLabel = document.getElementById('kpi-erp-url');
 
                 if (urlInput) urlInput.value = data.melodi_base_url || '';
@@ -898,6 +1159,28 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     } else {
                         keyInput.placeholder = 'Aucune clé configurée (saisir pour définir)';
                         if (keyHint) keyHint.innerHTML = 'Jeton secret partagé (X-Internal-MCP-Key). <span style="color: var(--warning-color);">Aucune clé configurée</span>';
+                    }
+                }
+
+                if (jwtSecretInput) {
+                    jwtSecretInput.value = '';
+                    if (data.has_jwt_secret) {
+                        jwtSecretInput.placeholder = 'Secret JWT configuré (' + (data.jwt_secret_preview || '••••') + ') — Laisser vide pour conserver';
+                        if (jwtSecretHint) jwtSecretHint.innerHTML = 'Clé secrète HMAC-SHA256 active : <code>' + escapeHtml(data.jwt_secret_preview) + '</code>';
+                    } else {
+                        jwtSecretInput.placeholder = 'Aucun secret configuré (saisir pour activer JWT)';
+                        if (jwtSecretHint) jwtSecretHint.innerHTML = '<span style="color: var(--warning-color);">⚠️ Aucun secret JWT configuré — L\'accès MCP via Authorization sera rejeté.</span>';
+                    }
+                }
+
+                if (mcpKeyInput) {
+                    mcpKeyInput.value = '';
+                    if (data.has_mcp_api_key) {
+                        mcpKeyInput.placeholder = 'Clé MCP API configurée (' + (data.mcp_api_key_preview || '••••') + ') — Laisser vide pour conserver';
+                        if (mcpKeyHint) mcpKeyHint.innerHTML = 'Clé d\'infrastructure exigée dans le JWT. Actuelle : <code>' + escapeHtml(data.mcp_api_key_preview) + '</code>';
+                    } else {
+                        mcpKeyInput.placeholder = 'Aucune clé requise (laisser vide ou saisir pour exiger)';
+                        if (mcpKeyHint) mcpKeyHint.innerHTML = 'Optionnelle : si définie, le JWT doit obligatoirement porter cette même valeur.';
                     }
                 }
             } catch (e) {
@@ -962,6 +1245,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const url = document.getElementById('cfg-melodi-url').value.trim();
             const key = document.getElementById('cfg-melodi-key').value.trim();
             const prefix = document.getElementById('cfg-api-prefix').value.trim();
+            const jwtSecret = document.getElementById('cfg-jwt-secret') ? document.getElementById('cfg-jwt-secret').value.trim() : '';
+            const mcpKey = document.getElementById('cfg-mcp-key') ? document.getElementById('cfg-mcp-key').value.trim() : '';
             const alertBox = document.getElementById('config-alert');
             const btn = document.getElementById('btn-save-config');
             alertBox.style.display = 'none';
@@ -973,6 +1258,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             if (url) payload.melodi_base_url = url;
             if (key) payload.melodi_api_key = key;
             if (prefix !== undefined && prefix !== null) payload.melodi_api_prefix = prefix;
+            if (jwtSecret) payload.jwt_secret = jwtSecret;
+            if (mcpKey) payload.mcp_api_key = mcpKey;
 
             try {
                 const res = await fetch(apiBase + '/api/config', {

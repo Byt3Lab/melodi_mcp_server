@@ -63,7 +63,6 @@ Le serveur communique avec l'instance MELODI ERP via une API REST sécurisée. L
 - `Authorization: Bearer <MELODI_API_KEY>` (ou `X-Melodi-Service-Token: <TOKEN>`)
 - `X-Correlation-ID: <UUID>` : Identifiant de traçabilité unique généré par appel.
 - `X-Melodi-User-ID: <USER_ID>` *(facultatif)* : Identité de l'utilisateur délégué si authentifié.
-- `X-Melodi-Org-ID: <ORG_ID>` *(facultatif)* : Contexte de l'organisation.
 
 ### Routes requises côté MELODI
 | Méthode | Route dynamique | Rôle |
@@ -116,7 +115,8 @@ cp .env.example .env
 | `MCP_TRANSPORT` | `stdio` | Mode de transport : `stdio` (local) ou `http`/`sse` (réseau) |
 | `MCP_SERVER_HOST` | `127.0.0.1` | Adresse d'écoute en mode HTTP |
 | `MCP_SERVER_PORT` | `8765` | Port d'écoute en mode HTTP |
-| `MCP_API_KEY` | *(vide)* | Clé secrète optionnelle exigée auprès des clients MCP (`X-MCP-API-KEY` ou paramètre `?mcp_api_key=`) |
+| `MCP_JWT_SECRET` | *(vide)* | Clé secrète de cryptage/signature JWT (HS256) partagée avec MELODI ERP pour valider l'en-tête `Authorization: Bearer <jwt>` |
+| `MCP_API_KEY` | *(vide)* | Clé d'infrastructure optionnelle vérifiée à l'intérieur du claim `mcp_api_key` du JWT |
 | `ADMIN_DASHBOARD_ENABLED` | `true` | Activer la console d'administration web |
 | `ADMIN_PREFIX` | `/admin` | Préfixe d'accès à la console d'administration |
 | `ADMIN_API_KEY` | `admin` | Clé d'API d'authentification pour la console d'administration |
@@ -226,7 +226,7 @@ Accessible par défaut sur : **`http://localhost:8765/admin`**
 
 ## 8. Sécurité & Confidentialité
 
-- **Authentification optionnelle des clients MCP** : Grâce au middleware `McpAuthMiddleware`, vous pouvez sécuriser les endpoints `/mcp`, `/sse` et `/` via `MCP_API_KEY`. Tout client distant (comme VS Code) doit obligatoirement s'authentifier via l'en-tête `X-MCP-API-KEY: <clé>` ou via le paramètre d'URL `?mcp_api_key=<clé>`, sans quoi la requête est rejetée avec un code HTTP 401 Unauthorized.
+- **Authentification unifiée par jeton JWT (`Authorization`)** : Grâce au middleware `McpAuthMiddleware`, la connexion des clients MCP distant s'effectue via un unique en-tête `Authorization: Bearer <jwt>`. Le jeton JWT est signé en HS256 avec la clé secrète `jwt_secret` (configurable dans le dashboard ou via `MCP_JWT_SECRET`) et contient à la fois la clé MCP infrastructure (`mcp_api_key`) et l'identifiant personnel utilisateur de l'ERP (`user_id`).
 - **Sanitisation des logs** : Un filtre de journalisation (`SecretMaskingFormatter`) expurge automatiquement tout jeton Bearer, mot de passe ou clé d'API des journaux.
 - **Validation stricte des schémas** : Les arguments envoyés par les clients sont validés localement via `jsonschema.Draft7Validator` avant toute transmission à l'ERP.
 - **Garde-fous sur les outils sensibles** : Les outils marqués `requires_confirmation: true` exigent explicitement l'argument `_confirmed: true` pour s'exécuter.
@@ -238,7 +238,7 @@ Accessible par défaut sur : **`http://localhost:8765/admin`**
 
 ### Option A : Connexion HTTP (VS Code / Copilot Agent / Cursor)
 
-Dans votre fichier `.mcp.json` ou via l'interface **Agent Customizations** :
+Dans votre fichier `.mcp.json` ou la configuration de votre client :
 
 ```json
 {
@@ -247,7 +247,7 @@ Dans votre fichier `.mcp.json` ou via l'interface **Agent Customizations** :
       "type": "http",
       "url": "http://localhost:8765/mcp",
       "headers": {
-        "X-MCP-API-KEY": "votre_cle_mcp_si_configuree"
+        "Authorization": "Bearer <TOKEN_JWT_GENERE_DANS_MELODI_ERP>"
       }
     }
   }
@@ -255,7 +255,13 @@ Dans votre fichier `.mcp.json` ou via l'interface **Agent Customizations** :
 ```
 
 > [!NOTE]
-> Si la variable `MCP_API_KEY` n'est pas renseignée dans votre `.env`, l'authentification est facultative. Si `MCP_API_KEY` est activée, renseignez votre jeton soit via l'en-tête `"X-MCP-API-KEY": "<clé>"`, soit directement dans l'URL : `"url": "http://localhost:8765/mcp?mcp_api_key=<clé>"`.
+> Le token JWT est généré dans le module MCP de MELODI ERP. Il doit être signé en `HS256` avec la clé secrète configurée dans `melodi_mcp_server` et comporter au minimum :
+> ```json
+> {
+>   "mcp_api_key": "votre_cle_mcp_si_definie",
+>   "user_id": "votre_identifiant_utilisateur_melodi"
+> }
+> ```
 
 ### Option B : Connexion STDIO locale (Claude Desktop / VS Code)
 
@@ -271,6 +277,24 @@ Pour connecter Claude Desktop à `melodi_mcp_server` en mode processus local :
       "command": "/home/gomsugaetant/Documents/byt3lab/projets/melodi_mcp_server/venv/bin/melodi-mcp-server",
       "args": ["--transport", "stdio"],
       "env": {
+        "MELODI_BASE_URL": "http://localhost:8000",
+        "MELODI_API_PREFIX": "/api/melodi_mcp/internal",
+        "MELODI_API_KEY": "votre_cle_secrete_melodi"
+      }
+    }
+  }
+}
+```
+
+### Option C : Connexion Automatique OAuth 2.0 (ChatGPT Custom GPTs / Actions, Claude & Clients IA)
+
+Pour connecter des clients IA distants supportant OAuth 2.0 :
+- **Découverte automatique (RFC 8414)** : `http://localhost:8765/.well-known/oauth-authorization-server` (et `/.well-known/openid-configuration`)
+- **URL d'Autorisation** : `http://localhost:8765/oauth/authorize`
+- **URL de Jeton (Token URL)** : `http://localhost:8765/oauth/token`
+- **Enregistrement dynamique (RFC 7591)** : `http://localhost:8765/oauth/register`
+
+Lors de la première connexion, le client IA redirige l'utilisateur vers la mire d'autorisation web. L'utilisateur y colle simplement son jeton JWT généré dans MELODI ERP. Le serveur MCP valide la signature, vérifie que le jeton n'est pas révoqué, et fournit le jeton d'accès au client IA pour exécuter les outils en son nom.
         "MELODI_BASE_URL": "http://localhost:8000",
         "MELODI_API_PREFIX": "/api/melodi_mcp/internal",
         "MELODI_API_KEY": "votre_cle_secrete_melodi"

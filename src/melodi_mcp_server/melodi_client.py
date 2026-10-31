@@ -74,7 +74,6 @@ class MelodiAsyncClient:
         self,
         correlation_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        org_id: Optional[str] = None,
         user_key: Optional[str] = None,
     ) -> dict[str, str]:
         """Génère les en-têtes d'authentification et de traçabilité."""
@@ -95,8 +94,6 @@ class MelodiAsyncClient:
             headers["X-MCP-User-Key"] = str(user_key)
         if user_id:
             headers["X-Melodi-User-ID"] = str(user_id)
-        if org_id:
-            headers["X-Melodi-Org-ID"] = str(org_id)
 
         return headers
 
@@ -112,13 +109,12 @@ class MelodiAsyncClient:
         path: str,
         correlation_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        org_id: Optional[str] = None,
         user_key: Optional[str] = None,
         json_data: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Exécute une requête HTTP avec gestion robuste des erreurs et des délais."""
         url = self._resolve_url(path)
-        headers = self._build_headers(correlation_id=correlation_id, user_id=user_id, org_id=org_id, user_key=user_key)
+        headers = self._build_headers(correlation_id=correlation_id, user_id=user_id, user_key=user_key)
         cid = headers["X-Correlation-ID"]
 
         try:
@@ -244,7 +240,6 @@ class MelodiAsyncClient:
         arguments: dict[str, Any],
         correlation_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        org_id: Optional[str] = None,
         user_key: Optional[str] = None,
         call_id: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -259,7 +254,6 @@ class MelodiAsyncClient:
             "context": {
                 "client": "melodi_mcp_server",
                 "user_id": user_id,
-                "org_id": org_id,
                 "user_key": user_key,
                 "user_token": user_key,
             },
@@ -269,7 +263,6 @@ class MelodiAsyncClient:
             path=f"/tools/{tool_name}/execute",
             correlation_id=correlation_id,
             user_id=user_id,
-            org_id=org_id,
             user_key=user_key,
             json_data=payload,
         )

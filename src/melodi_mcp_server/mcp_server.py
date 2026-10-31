@@ -16,7 +16,7 @@ import mcp.types as types
 from .admin.routes import create_admin_routes
 from .health import HealthChecker
 from .melodi_client import MelodiAsyncClient
-from .security import McpAuthMiddleware, SecurityContext, current_user_token
+from .security import McpAuthMiddleware, SecurityContext, current_user_token, current_jwt_payload
 from .settings import Settings, get_settings
 from .tool_dispatcher import ToolDispatcher
 from .tool_registry import DynamicToolRegistry
@@ -78,8 +78,10 @@ class MelodiMcpServerApp:
         ) -> types.CallToolResult:
             args = req.arguments or {}
             token = current_user_token.get()
+            jwt_data = current_jwt_payload.get() or {}
             sec_context = SecurityContext(
                 user_key=token,
+                user_id=str(jwt_data.get("user_id") or token) if (jwt_data.get("user_id") is not None or token) else None,
                 is_authenticated=bool(token),
             )
             result = await self.dispatcher.execute_tool(req.name, args, context=sec_context)
@@ -143,11 +145,21 @@ class MelodiMcpServerApp:
 
         routes.append(Route("/health", health_endpoint, methods=["GET"]))
 
+        # Initialisation de la base de données SQLite partagée
+        if admin_db is None:
+            from melodi_mcp_server.admin.db import AdminDatabase
+            admin_db = AdminDatabase(self.settings.admin_db_path)
+
+        self._admin_db = admin_db
+
+        # Ajout des routes OAuth 2.0 (Découverte RFC 8414, Authorize & Token)
+        from melodi_mcp_server.oauth import create_oauth_routes
+        oauth_routes = create_oauth_routes(admin_db, self.settings, client=self.client)
+        routes.extend(oauth_routes)
+        logger.info("Serveur d'autorisation OAuth 2.0 activé (/oauth/authorize, /oauth/token, /.well-known).")
+
         # Ajout du Dashboard d'Administration si activé
         if self.settings.admin_dashboard_enabled:
-            if admin_db is None:
-                from melodi_mcp_server.admin.db import AdminDatabase
-                admin_db = AdminDatabase(self.settings.admin_db_path)
 
             saved_url = admin_db.get_config("melodi_base_url")
             if saved_url:
@@ -170,6 +182,22 @@ class MelodiMcpServerApp:
                 except Exception as e:
                     logger.warning("Impossible d'appliquer le préfixe API persisté '%s' : %s", saved_prefix, e)
 
+            saved_jwt_secret = admin_db.get_config("jwt_secret")
+            if saved_jwt_secret:
+                try:
+                    from pydantic import SecretStr
+                    self.settings.jwt_secret = SecretStr(saved_jwt_secret)
+                except Exception as e:
+                    logger.warning("Impossible d'appliquer la clé secrète JWT persistée : %s", e)
+
+            saved_mcp_api_key = admin_db.get_config("mcp_api_key")
+            if saved_mcp_api_key:
+                try:
+                    from pydantic import SecretStr
+                    self.settings.mcp_api_key = SecretStr(saved_mcp_api_key)
+                except Exception as e:
+                    logger.warning("Impossible d'appliquer la clé MCP API persistée : %s", e)
+
             admin_routes = create_admin_routes(
                 self.registry,
                 self.health_checker,
@@ -189,6 +217,13 @@ class MelodiMcpServerApp:
         @asynccontextmanager
         async def lifespan(app):
             await self.startup()
+            # Nettoyage automatique des tokens expirés (> 72h) et des codes OAuth au démarrage
+            if hasattr(self, "_admin_db") and self._admin_db:
+                try:
+                    self._admin_db.cleanup_expired_revoked_tokens(max_age_hours=72)
+                    self._admin_db.cleanup_expired_oauth_codes()
+                except Exception as e:
+                    logger.warning("Erreur lors de la purge initiale des tokens expirés : %s", e)
             try:
                 if session_mgr:
                     async with session_mgr.run():
@@ -199,16 +234,20 @@ class MelodiMcpServerApp:
                 await self.shutdown()
 
         api_key_str = self.settings.mcp_api_key.get_secret_value() if self.settings.mcp_api_key else None
+        jwt_secret_str = self.settings.jwt_secret.get_secret_value() if self.settings.jwt_secret else None
         middleware = [
             Middleware(
                 McpAuthMiddleware,
                 api_key=api_key_str,
+                jwt_secret=jwt_secret_str,
                 admin_prefix=self.settings.admin_prefix,
+                settings=self.settings,
+                db=admin_db,
             )
         ]
-        if api_key_str:
-            logger.info("Authentification MCP restreinte par clé globale (clé requise pour /mcp, / et /sse).")
+        if jwt_secret_str:
+            logger.info("Authentification MCP unifiée par jeton JWT active (Authorization: Bearer <jwt> requis).")
         else:
-            logger.info("Relais MCP transparent activé (les jetons utilisateurs Bearer sont propagés vers MELODI).")
+            logger.info("Serveur MCP en attente de configuration de jwt_secret.")
 
         return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)

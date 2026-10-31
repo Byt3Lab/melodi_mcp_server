@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import logging
 import os
 import secrets
@@ -21,6 +23,7 @@ class AdminDatabase:
         self.db_path = db_path
         self._lock = threading.Lock()
         self._mem_conn: Optional[sqlite3.Connection] = None
+        self._revoked_tokens_cache: set[str] = set()
 
         # Si base en mémoire, on garde une connexion persistante
         if db_path == ":memory:":
@@ -80,6 +83,51 @@ class AdminDatabase:
                 );
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS revoked_tokens (
+                    token_id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    revoked_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    reason TEXT
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_revoked_tokens_revoked_at ON revoked_tokens(revoked_at);
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS oauth_codes (
+                    code TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    redirect_uri TEXT NOT NULL,
+                    jwt_token TEXT NOT NULL,
+                    token_id TEXT,
+                    user_id TEXT,
+                    code_challenge TEXT,
+                    code_challenge_method TEXT,
+                    expires_at TEXT NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS oauth_clients (
+                    client_id TEXT PRIMARY KEY,
+                    client_secret TEXT,
+                    client_name TEXT,
+                    redirect_uris TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            cursor = conn.execute("SELECT token_id FROM revoked_tokens;")
+            self._revoked_tokens_cache = {row["token_id"] for row in cursor.fetchall()}
             conn.commit()
 
     @staticmethod
@@ -400,3 +448,289 @@ class AdminDatabase:
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute("SELECT key, value FROM system_config;")
             return {row["key"]: row["value"] for row in cursor.fetchall()}
+
+    # --- Gestion des Tokens Révoqués & Purge ---
+
+    def revoke_token(
+        self,
+        token_id: str,
+        user_id: Optional[str] = None,
+        expires_at: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """Enregistre un jeton JWT dans la liste des tokens révoqués."""
+        clean_id = token_id.strip()
+        if not clean_id:
+            raise ValueError("L'identifiant du token (token_id) ne peut pas être vide.")
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO revoked_tokens (token_id, user_id, revoked_at, expires_at, reason)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(token_id) DO UPDATE SET
+                    revoked_at = excluded.revoked_at,
+                    reason = excluded.reason;
+                """,
+                (clean_id, str(user_id) if user_id is not None else None, now, expires_at, reason),
+            )
+            conn.commit()
+            self._revoked_tokens_cache.add(clean_id)
+            logger.info("Token JWT '%s' révoqué avec succès (user: %s).", clean_id, user_id)
+            return True
+
+    def is_token_revoked(self, token_id: str) -> bool:
+        """Vérifie instantanément si un jeton est révoqué via le cache mémoire."""
+        if not token_id:
+            return False
+        return token_id.strip() in self._revoked_tokens_cache
+
+    def list_revoked_tokens(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Liste les jetons révoqués ordonnés par date décroissante."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT token_id, user_id, revoked_at, expires_at, reason
+                FROM revoked_tokens
+                ORDER BY revoked_at DESC
+                LIMIT ?;
+                """,
+                (limit,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def delete_revoked_token(self, token_id: str) -> bool:
+        """Supprime un jeton de la liste des révocations (déblocage manuel)."""
+        clean_id = token_id.strip()
+        with self._lock, self._get_connection() as conn:
+            conn.execute("DELETE FROM revoked_tokens WHERE token_id = ?;", (clean_id,))
+            conn.commit()
+            self._revoked_tokens_cache.discard(clean_id)
+            return True
+
+    def cleanup_expired_revoked_tokens(self, max_age_hours: int = 72) -> int:
+        """Supprime de la base les tokens révoqués de plus de max_age_hours (ou expirés)."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        now_str = datetime.now(timezone.utc).isoformat()
+
+        with self._lock, self._get_connection() as conn:
+            # Supprimer les tokens révoqués depuis plus de max_age_hours OU dont expires_at est dans le passé
+            cursor = conn.execute(
+                """
+                DELETE FROM revoked_tokens
+                WHERE revoked_at < ?
+                   OR (expires_at IS NOT NULL AND expires_at < ?);
+                """,
+                (cutoff, now_str),
+            )
+            deleted_count = cursor.rowcount
+            # Synchroniser le cache mémoire
+            cur = conn.execute("SELECT token_id FROM revoked_tokens;")
+            self._revoked_tokens_cache = {row["token_id"] for row in cur.fetchall()}
+            conn.commit()
+
+            if deleted_count > 0:
+                logger.info(
+                    "Purge des tokens révoqués terminée : %d token(s) de plus de %d heures supprimé(s).",
+                    deleted_count,
+                    max_age_hours,
+                )
+            return deleted_count
+
+    # --- Gestion OAuth 2.0 (Codes & Clients) ---
+
+    def create_oauth_code(
+        self,
+        client_id: str,
+        redirect_uri: str,
+        jwt_token: str,
+        token_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        code_challenge: Optional[str] = None,
+        code_challenge_method: Optional[str] = None,
+        ttl_seconds: int = 300,
+    ) -> str:
+        """Génère et stocke un code d'autorisation OAuth 2.0 temporaire (5 min par défaut)."""
+        code = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(seconds=ttl_seconds)
+
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO oauth_codes (
+                    code, client_id, redirect_uri, jwt_token, token_id, user_id,
+                    code_challenge, code_challenge_method, expires_at, used
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0);
+                """,
+                (
+                    code,
+                    client_id,
+                    redirect_uri,
+                    jwt_token,
+                    token_id,
+                    str(user_id) if user_id is not None else None,
+                    code_challenge,
+                    code_challenge_method,
+                    expires.isoformat(),
+                ),
+            )
+            conn.commit()
+        return code
+
+    def consume_oauth_code(
+        self,
+        code: str,
+        client_id: str,
+        redirect_uri: Optional[str] = None,
+        code_verifier: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Consomme un code d'autorisation OAuth 2.0 de manière atomique (usage unique).
+
+        Vérifie la validité, l'expiration, PKCE et si le token_id associé n'a pas été révoqué.
+        """
+        if not code:
+            return None
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM oauth_codes WHERE code = ?;",
+                (code.strip(),),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            # Code déjà utilisé (protection anti-rejeu)
+            if row["used"]:
+                logger.warning("Tentative de réutilisation d'un code d'autorisation OAuth : %s", code)
+                return None
+
+            # Vérification expiration
+            if row["expires_at"] <= now_iso:
+                logger.warning("Code d'autorisation OAuth expiré : %s", code)
+                return None
+
+            # Vérification client_id
+            if row["client_id"] != client_id:
+                logger.warning(
+                    "client_id non concordant pour le code OAuth (attendu: %s, reçu: %s)",
+                    row["client_id"],
+                    client_id,
+                )
+                return None
+
+            # Vérification redirect_uri si fourni
+            if redirect_uri and row["redirect_uri"] != redirect_uri:
+                logger.warning(
+                    "redirect_uri non concordant pour le code OAuth (attendu: %s, reçu: %s)",
+                    row["redirect_uri"],
+                    redirect_uri,
+                )
+                return None
+
+            # Vérification PKCE si code_challenge était présent
+            challenge = row["code_challenge"]
+            if challenge:
+                if not code_verifier:
+                    logger.warning("code_verifier manquant alors qu'un code_challenge était enregistré.")
+                    return None
+                method = row["code_challenge_method"] or "S256"
+                if method == "S256":
+                    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+                    computed = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+                    if not secrets.compare_digest(computed, challenge.rstrip("=")):
+                        logger.warning("Échec de la validation PKCE S256.")
+                        return None
+                elif method == "plain":
+                    if not secrets.compare_digest(code_verifier, challenge):
+                        logger.warning("Échec de la validation PKCE plain.")
+                        return None
+                else:
+                    logger.warning("Méthode de code_challenge_method inconnue : %s", method)
+                    return None
+
+            # Vérifier si le token associé n'a pas été révoqué entre-temps
+            token_id = row["token_id"]
+            if token_id and self.is_token_revoked(token_id):
+                logger.warning("Le token_id associé au code OAuth est déjà révoqué : %s", token_id)
+                return None
+
+            # Marquer le code comme consommé
+            conn.execute(
+                "UPDATE oauth_codes SET used = 1 WHERE code = ?;",
+                (code.strip(),),
+            )
+            conn.commit()
+
+            return {
+                "code": row["code"],
+                "client_id": row["client_id"],
+                "redirect_uri": row["redirect_uri"],
+                "jwt_token": row["jwt_token"],
+                "token_id": row["token_id"],
+                "user_id": row["user_id"],
+            }
+
+    def register_oauth_client(
+        self,
+        client_name: str,
+        redirect_uris: List[str],
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Enregistre dynamiquement un client OAuth 2.0 (RFC 7591)."""
+        cid = client_id or f"client_{secrets.token_hex(8)}"
+        secret = client_secret or secrets.token_urlsafe(32)
+        uris_str = json.dumps(redirect_uris)
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO oauth_clients (client_id, client_secret, client_name, redirect_uris, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    client_secret = excluded.client_secret,
+                    client_name = excluded.client_name,
+                    redirect_uris = excluded.redirect_uris;
+                """,
+                (cid, secret, client_name, uris_str, now),
+            )
+            conn.commit()
+
+        return {
+            "client_id": cid,
+            "client_secret": secret,
+            "client_name": client_name,
+            "redirect_uris": redirect_uris,
+        }
+
+    def get_oauth_client(self, client_id: str) -> Optional[Dict[str, Any]]:
+        """Récupère les informations d'un client OAuth enregistré."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute("SELECT * FROM oauth_clients WHERE client_id = ?;", (client_id.strip(),))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "client_id": row["client_id"],
+                "client_secret": row["client_secret"],
+                "client_name": row["client_name"],
+                "redirect_uris": json.loads(row["redirect_uris"]),
+                "created_at": row["created_at"],
+            }
+
+    def cleanup_expired_oauth_codes(self) -> int:
+        """Purge les codes OAuth expirés ou déjà utilisés."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM oauth_codes WHERE used = 1 OR expires_at <= ?;",
+                (now_str,),
+            )
+            conn.commit()
+            return cursor.rowcount

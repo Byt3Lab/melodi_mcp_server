@@ -156,7 +156,21 @@ async def test_tool_dispatcher_handles_403_insufficient_permissions(mock_setting
 
 @pytest.mark.asyncio
 async def test_mcp_auth_middleware_bearer_extraction():
-    """Vérifie que McpAuthMiddleware extrait les Bearer tokens dans current_user_token."""
+    """Vérifie que McpAuthMiddleware extrait le user_id d'un jeton JWT valide."""
+    import time
+    import jwt
+    secret = "secret-jwt-key-32-bytes-long-12345"
+    token_jwt = jwt.encode(
+        {
+            "token_id": "tok_pass_1",
+            "mcp_api_key": "mcp_srv_key",
+            "user_id": "usr_777",
+            "exp": int(time.time()) + 3600,
+        },
+        secret,
+        algorithm="HS256",
+    )
+
     extracted_token = None
 
     async def dummy_app(scope, receive, send):
@@ -166,29 +180,20 @@ async def test_mcp_auth_middleware_bearer_extraction():
         await res(scope, receive, send)
 
     from melodi_mcp_server.security import McpAuthMiddleware
-    middleware = McpAuthMiddleware(dummy_app)
+    middleware = McpAuthMiddleware(dummy_app, jwt_secret=secret, api_key="mcp_srv_key")
 
     transport = ASGITransport(app=middleware)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        # 1. Requête avec Bearer token
+        # 1. Requête avec Authorization: Bearer <jwt> -> 200 et extraction user_id
         resp = await client.post(
             "/mcp",
-            headers={"Authorization": "Bearer mcp_live_token_777"},
+            headers={"Authorization": f"Bearer {token_jwt}"},
             json={"jsonrpc": "2.0"},
         )
         assert resp.status_code == 200
-        assert extracted_token == "mcp_live_token_777"
+        assert extracted_token == "usr_777"
 
-        # 2. Requête avec en-tête X-User-MCP-Key
-        resp2 = await client.post(
-            "/mcp",
-            headers={"X-User-MCP-Key": "mcp_live_header_888"},
-            json={"jsonrpc": "2.0"},
-        )
-        assert resp2.status_code == 200
-        assert extracted_token == "mcp_live_header_888"
-
-        # 3. Requête sans token
-        resp3 = await client.post("/mcp", json={"jsonrpc": "2.0"})
-        assert resp3.status_code == 200
-        assert extracted_token is None
+        # 2. Requête sans en-tête Authorization -> 401
+        resp2 = await client.post("/mcp", json={"jsonrpc": "2.0"})
+        assert resp2.status_code == 401
+        assert "Authorization" in resp2.json()["error"]["message"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 from typing import Any, Optional
@@ -320,12 +321,28 @@ def create_admin_routes(
             raw_k = settings.melodi_api_key.get_secret_value()
             key_preview = raw_k[:4] + "••••" + raw_k[-4:] if len(raw_k) > 8 else "••••••••"
 
+        has_jwt_secret = bool(settings.jwt_secret and settings.jwt_secret.get_secret_value())
+        jwt_secret_preview = ""
+        if has_jwt_secret:
+            raw_s = settings.jwt_secret.get_secret_value()
+            jwt_secret_preview = raw_s[:4] + "••••" + raw_s[-4:] if len(raw_s) > 8 else "••••••••"
+
+        has_mcp_api_key = bool(settings.mcp_api_key and settings.mcp_api_key.get_secret_value())
+        mcp_api_key_preview = ""
+        if has_mcp_api_key:
+            raw_m = settings.mcp_api_key.get_secret_value()
+            mcp_api_key_preview = raw_m[:4] + "••••" + raw_m[-4:] if len(raw_m) > 8 else "••••••••"
+
         return JSONResponse({
             "success": True,
             "melodi_base_url": settings.melodi_base_url,
             "melodi_api_prefix": settings.melodi_api_prefix,
             "has_melodi_api_key": has_key,
             "melodi_api_key_preview": key_preview,
+            "has_jwt_secret": has_jwt_secret,
+            "jwt_secret_preview": jwt_secret_preview,
+            "has_mcp_api_key": has_mcp_api_key,
+            "mcp_api_key_preview": mcp_api_key_preview,
             "catalog_sync_interval_seconds": settings.catalog_sync_interval_seconds,
             "user_role": current_user.get("role"),
         })
@@ -393,7 +410,7 @@ def create_admin_routes(
             }, status_code=400)
 
     async def update_config_api(request: Request) -> JSONResponse:
-        """Met à jour l'URL, le préfixe et/ou la clé API de MELODI ERP à chaud et persiste le changement dans SQLite."""
+        """Met à jour l'URL, le préfixe, la clé API MELODI, le secret JWT et/ou la clé MCP à chaud et persiste dans SQLite."""
         current_user = _get_current_user(request)
         if not current_user:
             return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -404,6 +421,8 @@ def create_admin_routes(
         raw_url = (body.get("melodi_base_url") or "").strip().rstrip("/")
         new_key = (body.get("melodi_api_key") or "").strip()
         raw_prefix = body.get("melodi_api_prefix")
+        new_jwt_secret = body.get("jwt_secret")
+        new_mcp_api_key = body.get("mcp_api_key")
 
         if raw_url and not raw_url.startswith(("http://", "https://")):
             return JSONResponse(
@@ -419,11 +438,11 @@ def create_admin_routes(
                 database.set_config("melodi_base_url", raw_url)
                 updated_items.append("URL")
 
-            # 2. Mise à jour de la clé API si fournie
+            # 2. Mise à jour de la clé API MELODI si fournie
             if new_key:
                 registry.client.update_api_key(new_key)
                 database.set_config("melodi_api_key", new_key)
-                updated_items.append("Clé API")
+                updated_items.append("Clé API MELODI")
 
             # 3. Mise à jour du préfixe API MCP si fourni
             if raw_prefix is not None:
@@ -431,9 +450,27 @@ def create_admin_routes(
                 database.set_config("melodi_api_prefix", new_prefix)
                 updated_items.append("Préfixe API")
 
+            # 4. Mise à jour de la clé secrète JWT si fournie
+            if new_jwt_secret is not None:
+                clean_jwt = str(new_jwt_secret).strip()
+                if clean_jwt:
+                    from pydantic import SecretStr
+                    settings.jwt_secret = SecretStr(clean_jwt)
+                    database.set_config("jwt_secret", clean_jwt)
+                    updated_items.append("Clé secrète JWT")
+
+            # 5. Mise à jour de la clé MCP API si fournie
+            if new_mcp_api_key is not None:
+                clean_mcp = str(new_mcp_api_key).strip()
+                if clean_mcp:
+                    from pydantic import SecretStr
+                    settings.mcp_api_key = SecretStr(clean_mcp)
+                    database.set_config("mcp_api_key", clean_mcp)
+                    updated_items.append("Clé MCP API")
+
             if not updated_items:
                 return JSONResponse(
-                    {"success": False, "error": "Aucune modification demandée (URL, préfixe ou clé API)."},
+                    {"success": False, "error": "Aucune modification demandée."},
                     status_code=400,
                 )
 
@@ -466,6 +503,92 @@ def create_admin_routes(
             logger.error("Erreur lors de la mise à jour des paramètres MELODI : %s", e)
             return JSONResponse({"success": False, "error": str(e)}, status_code=400)
 
+    # --- APIs Gestion des Jetons & Révocation ---
+
+    def _is_service_or_admin(request: Request) -> bool:
+        """Vérifie si l'appelant est soit un administrateur connecté, soit MELODI ERP authentifié par clé."""
+        if _get_current_user(request):
+            return True
+        auth_hdr = request.headers.get("Authorization", "").strip()
+        internal_key = request.headers.get("X-Internal-MCP-Key", "").strip()
+        expected_key = settings.melodi_api_key.get_secret_value() if settings.melodi_api_key else None
+        if expected_key:
+            if auth_hdr.lower().startswith("bearer "):
+                token = auth_hdr[7:].strip()
+                if hmac.compare_digest(token, expected_key):
+                    return True
+            if internal_key and hmac.compare_digest(internal_key, expected_key):
+                return True
+        return False
+
+    async def revoke_token_api(request: Request) -> JSONResponse:
+        """Enregistre la révocation d'un jeton JWT (appelé par MELODI ERP ou depuis le dashboard)."""
+        if not _is_service_or_admin(request):
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+        body = await _parse_body(request)
+        token_id = (body.get("token_id") or body.get("jti") or "").strip()
+        if not token_id:
+            return JSONResponse(
+                {"success": False, "error": "Le paramètre 'token_id' est requis pour révoquer un jeton."},
+                status_code=400,
+            )
+
+        user_id = body.get("user_id")
+        expires_at = body.get("expires_at")
+        reason = body.get("reason") or "Révoqué par MELODI ERP / Admin"
+
+        try:
+            database.revoke_token(
+                token_id=token_id,
+                user_id=str(user_id) if user_id is not None else None,
+                expires_at=str(expires_at) if expires_at is not None else None,
+                reason=str(reason),
+            )
+            return JSONResponse({
+                "success": True,
+                "token_id": token_id,
+                "message": f"Le jeton '{token_id}' a été révoqué avec succès.",
+            })
+        except Exception as e:
+            logger.error("Erreur lors de la révocation du jeton '%s' : %s", token_id, e)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    async def list_revoked_tokens_api(request: Request) -> JSONResponse:
+        """Retourne la liste des jetons révoqués."""
+        current_user = _get_current_user(request)
+        if not current_user:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+        tokens = database.list_revoked_tokens(limit=100)
+        return JSONResponse({"success": True, "revoked_tokens": tokens})
+
+    async def delete_revoked_token_api(request: Request) -> JSONResponse:
+        """Supprime un jeton de la liste des révocations (déblocage manuel)."""
+        current_user = _get_current_user(request)
+        if not current_user:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+        token_id = request.path_params.get("token_id", "").strip()
+        if not token_id:
+            return JSONResponse({"success": False, "error": "Token ID manquant."}, status_code=400)
+
+        database.delete_revoked_token(token_id)
+        return JSONResponse({"success": True, "message": f"Révocation du jeton '{token_id}' levée avec succès."})
+
+    async def cleanup_tokens_api(request: Request) -> JSONResponse:
+        """Déclenche la purge des jetons révoqués expirés (> 72h)."""
+        current_user = _get_current_user(request)
+        if not current_user:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+        deleted = database.cleanup_expired_revoked_tokens(max_age_hours=72)
+        return JSONResponse({
+            "success": True,
+            "deleted_count": deleted,
+            "message": f"Nettoyage effectué : {deleted} jeton(s) expiré(s) (> 72h) supprimé(s).",
+        })
+
     routes = [
         # Pages HTML
         Route(f"{prefix}", dashboard_view, methods=["GET"]),
@@ -489,5 +612,11 @@ def create_admin_routes(
         Route(f"{prefix}/api/status", status_api, methods=["GET"]),
         Route(f"{prefix}/api/tools", tools_api, methods=["GET"]),
         Route(f"{prefix}/api/sync", sync_api, methods=["POST"]),
+        # Gestion des Jetons & Révocation
+        Route(f"{prefix}/api/tokens/revoke", revoke_token_api, methods=["POST"]),
+        Route("/api/mcp/tokens/revoke", revoke_token_api, methods=["POST"]),
+        Route(f"{prefix}/api/tokens/revoked", list_revoked_tokens_api, methods=["GET"]),
+        Route(f"{prefix}/api/tokens/revoked/{{token_id:str}}", delete_revoked_token_api, methods=["DELETE"]),
+        Route(f"{prefix}/api/tokens/cleanup", cleanup_tokens_api, methods=["POST"]),
     ]
     return routes

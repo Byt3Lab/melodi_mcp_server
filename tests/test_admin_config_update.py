@@ -106,7 +106,7 @@ async def test_admin_config_api_get_and_update(mock_settings, sample_catalog_pay
         )
         assert bad_resp.status_code == 400
 
-        # 5. Application de la nouvelle URL, de la nouvelle clé d'API et du nouveau préfixe
+        # 5. Application de la nouvelle URL, de la nouvelle clé d'API, du préfixe, du secret JWT et de la clé MCP
         up_resp = await client.post(
             "/admin/api/config",
             headers=headers,
@@ -114,6 +114,8 @@ async def test_admin_config_api_get_and_update(mock_settings, sample_catalog_pay
                 "melodi_base_url": "http://new-erp-host:5000",
                 "melodi_api_key": "new-secret-token-xyz",
                 "melodi_api_prefix": "api/melodi_custom/",
+                "jwt_secret": "my-new-mcp-jwt-secret-key-32-bytes",
+                "mcp_api_key": "my-new-mcp-infra-api-key",
             },
         )
         assert up_resp.status_code == 200
@@ -127,11 +129,24 @@ async def test_admin_config_api_get_and_update(mock_settings, sample_catalog_pay
         assert app.settings.melodi_base_url == "http://new-erp-host:5000"
         assert app.settings.melodi_api_key.get_secret_value() == "new-secret-token-xyz"
         assert app.settings.melodi_api_prefix == "/api/melodi_custom"
+        assert app.settings.jwt_secret.get_secret_value() == "my-new-mcp-jwt-secret-key-32-bytes"
+        assert app.settings.mcp_api_key.get_secret_value() == "my-new-mcp-infra-api-key"
 
         # Vérifier la persistance dans la base SQLite
         assert admin_db.get_config("melodi_base_url") == "http://new-erp-host:5000"
         assert admin_db.get_config("melodi_api_key") == "new-secret-token-xyz"
         assert admin_db.get_config("melodi_api_prefix") == "/api/melodi_custom"
+        assert admin_db.get_config("jwt_secret") == "my-new-mcp-jwt-secret-key-32-bytes"
+        assert admin_db.get_config("mcp_api_key") == "my-new-mcp-infra-api-key"
+
+        # 6. Vérifier que GET /admin/api/config reflète ces clés masquées
+        cfg_resp2 = await client.get("/admin/api/config", headers=headers)
+        assert cfg_resp2.status_code == 200
+        data2 = cfg_resp2.json()
+        assert data2["has_jwt_secret"] is True
+        assert "••••" in data2["jwt_secret_preview"]
+        assert data2["has_mcp_api_key"] is True
+        assert "••••" in data2["mcp_api_key_preview"]
 
     await app.shutdown()
 
@@ -148,18 +163,22 @@ async def test_restoration_of_persisted_url_on_startup(mock_settings, sample_cat
     )
 
     admin_db = AdminDatabase(":memory:")
-    # Pré-configurer une URL, une clé et un préfixe personnalisés dans la base
+    # Pré-configurer une URL, une clé, un préfixe, un secret JWT et une clé MCP personnalisés dans la base
     admin_db.set_config("melodi_base_url", "https://restored-melodi")
     admin_db.set_config("melodi_api_key", "restored-super-key")
     admin_db.set_config("melodi_api_prefix", "/custom_prefix")
+    admin_db.set_config("jwt_secret", "restored-jwt-secret-xyz-32-bytes")
+    admin_db.set_config("mcp_api_key", "restored-mcp-key-12345")
 
     new_app = MelodiMcpServerApp(settings=mock_settings)
     new_http_app = new_app.create_http_app(admin_db=admin_db)
 
-    # Vérification que l'URL, la clé et le préfixe ont été immédiatement restaurés
+    # Vérification que l'URL, les clés et le préfixe ont été immédiatement restaurés
     assert str(new_app.client._client.base_url).rstrip("/") == "https://restored-melodi"
     assert new_app.settings.melodi_base_url == "https://restored-melodi"
     assert new_app.settings.melodi_api_key.get_secret_value() == "restored-super-key"
     assert new_app.settings.melodi_api_prefix == "/custom_prefix"
+    assert new_app.settings.jwt_secret.get_secret_value() == "restored-jwt-secret-xyz-32-bytes"
+    assert new_app.settings.mcp_api_key.get_secret_value() == "restored-mcp-key-12345"
 
     await new_app.shutdown()

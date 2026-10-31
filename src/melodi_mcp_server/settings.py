@@ -1,7 +1,7 @@
 """Configuration centralisée pour melodi_mcp_server."""
 
 from typing import Any, Literal, Optional
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -67,7 +67,12 @@ class Settings(BaseSettings):
     )
     mcp_api_key: Optional[SecretStr] = Field(
         default=None,
-        description="Clé secrète d'accès optionnelle exigée auprès des clients MCP (Bearer token / X-API-Key)",
+        description="Clé d'infrastructure MCP optionnelle (validée dans le payload JWT sous mcp_api_key)",
+    )
+    jwt_secret: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices("jwt_secret", "mcp_jwt_secret"),
+        description="Clé secrète de signature JWT (HS256) partagée avec MELODI ERP pour sécuriser la connexion MCP",
     )
 
     # --- Console Web d'Administration ---
@@ -134,9 +139,9 @@ class Settings(BaseSettings):
     def validate_admin_prefix(cls, v: str) -> str:
         return normalize_url_path(v)
 
-    @field_validator("admin_api_key", mode="before")
+    @field_validator("admin_api_key", "mcp_api_key", "jwt_secret", mode="before")
     @classmethod
-    def validate_admin_api_key(cls, v: Any) -> Any:
+    def validate_optional_secrets(cls, v: Any) -> Any:
         if v == "" or (isinstance(v, SecretStr) and not v.get_secret_value()):
             return None
         return v

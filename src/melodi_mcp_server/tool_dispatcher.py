@@ -92,7 +92,6 @@ class ToolDispatcher:
                         arguments=args,
                         correlation_id=call_id,
                         user_id=sec_context.user_id,
-                        org_id=sec_context.org_id,
                         user_key=user_key,
                         call_id=call_id,
                     ),
