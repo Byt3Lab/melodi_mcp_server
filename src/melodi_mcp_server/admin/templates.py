@@ -505,12 +505,71 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         </p>
                     </div>
 
+                    <hr style="border: none; border-top: 1px solid var(--border-color); margin: 24px 0;">
+
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                        <div style="font-weight: 600; font-size: 0.95rem; color: var(--accent-color);">
+                            🌐 Scalabilité & Haute Disponibilité (Cluster Multi-Instances)
+                        </div>
+                        <span id="badge-cluster-status" class="badge" style="background: rgba(255,255,255,0.08); font-size: 0.75rem;">
+                            Mode : Standalone (SQLite)
+                        </span>
+                    </div>
+
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 16px 0;">
+                        Configurez ici la bascule vers PostgreSQL lorsque vous avez besoin de déployer plusieurs nœuds <code>melodi_mcp_server</code> derrière un Load Balancer.
+                    </p>
+
+                    <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+                        <input type="checkbox" id="cfg-cluster-mode" style="width: 18px; height: 18px; cursor: pointer;">
+                        <label for="cfg-cluster-mode" style="margin: 0; cursor: pointer; font-weight: 600;">
+                            Activer le mode Cluster Scalable (PostgreSQL partagé)
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cfg-db-url">URL PostgreSQL de Connexion (DATABASE_URL)</label>
+                        <input type="password" id="cfg-db-url" autocomplete="new-password" placeholder="postgresql://user:pass@host:5432/melodi_mcp">
+                        <span id="cfg-db-url-hint" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
+                            Chaîne de connexion vers la base de données PostgreSQL partagée.
+                        </span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="cfg-redis-url">URL Redis pour Cache & Pub/Sub (Optionnel)</label>
+                        <input type="password" id="cfg-redis-url" autocomplete="new-password" placeholder="redis://host:6379/0">
+                        <span id="cfg-redis-url-hint" style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px;">
+                            Optionnel : utilisé pour l'invalidation instantanée des révocations de jetons entre instances.
+                        </span>
+                    </div>
+
+                    <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+                        <input type="checkbox" id="cfg-stateless-http" style="width: 18px; height: 18px; cursor: pointer;">
+                        <label for="cfg-stateless-http" style="margin: 0; cursor: pointer; font-size: 0.85rem;">
+                            Mode MCP Stateless HTTP (évite la dépendance à l'affinité de session / Sticky Sessions)
+                        </label>
+                    </div>
+
+                    <div id="cluster-test-result" style="display: none; padding: 12px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 16px;"></div>
+
+                    <div style="background: rgba(234, 179, 8, 0.08); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                        <div style="font-weight: 600; font-size: 0.8rem; color: #eab308; margin-bottom: 4px;">
+                            ⚠️ Prise d'effet au Redémarrage
+                        </div>
+                        <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0;">
+                            Après avoir testé et enregistré la configuration de scalabilité, vous devez <strong>redémarrer melodi_mcp_server</strong> pour appliquer la bascule vers PostgreSQL.
+                        </p>
+                    </div>
+
                     <div style="display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap;">
                         <button type="button" id="btn-test-config" class="btn btn-outline" onclick="handleTestConfig()">
-                            🔍 Tester la Connexion ERP
+                            🔍 Tester Connexion ERP
+                        </button>
+                        <button type="button" id="btn-test-cluster" class="btn btn-outline" onclick="handleTestCluster()">
+                            🔌 Tester Connexion Cluster
                         </button>
                         <button type="submit" id="btn-save-config" class="btn">
-                            💾 Enregistrer & Appliquer
+                            💾 Enregistrer les Modifications
                         </button>
                     </div>
                 </form>
@@ -1183,8 +1242,99 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         if (mcpKeyHint) mcpKeyHint.innerHTML = 'Optionnelle : si définie, le JWT doit obligatoirement porter cette même valeur.';
                     }
                 }
+
+                // Configuration Scalabilité & Cluster
+                const clusterModeCheck = document.getElementById('cfg-cluster-mode');
+                const dbUrlInput = document.getElementById('cfg-db-url');
+                const dbUrlHint = document.getElementById('cfg-db-url-hint');
+                const redisUrlInput = document.getElementById('cfg-redis-url');
+                const redisUrlHint = document.getElementById('cfg-redis-url-hint');
+                const statelessCheck = document.getElementById('cfg-stateless-http');
+                const clusterBadge = document.getElementById('badge-cluster-status');
+
+                if (clusterModeCheck) clusterModeCheck.checked = Boolean(data.cluster_mode);
+                if (statelessCheck) statelessCheck.checked = Boolean(data.mcp_stateless_http);
+
+                if (clusterBadge) {
+                    if (data.is_running_cluster) {
+                        clusterBadge.innerHTML = '🟢 Actif : Cluster (PostgreSQL)';
+                        clusterBadge.style.color = '#10b981';
+                        clusterBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+                    } else {
+                        clusterBadge.innerHTML = '⚪ Actif : Standalone (SQLite)';
+                        clusterBadge.style.color = 'var(--text-muted)';
+                        clusterBadge.style.background = 'rgba(255, 255, 255, 0.08)';
+                    }
+                }
+
+                if (dbUrlInput) {
+                    dbUrlInput.value = '';
+                    if (data.has_database_url) {
+                        dbUrlInput.placeholder = 'PostgreSQL configuré (' + (data.database_url_preview || '••••') + ') — Laisser vide pour conserver';
+                        if (dbUrlHint) dbUrlHint.innerHTML = 'PostgreSQL actif : <code>' + escapeHtml(data.database_url_preview) + '</code>';
+                    } else {
+                        dbUrlInput.placeholder = 'postgresql://user:pass@host:5432/melodi_mcp';
+                        if (dbUrlHint) dbUrlHint.innerHTML = 'Aucune base PostgreSQL configurée (mode SQLite actif par défaut).';
+                    }
+                }
+
+                if (redisUrlInput) {
+                    redisUrlInput.value = '';
+                    if (data.has_redis_url) {
+                        redisUrlInput.placeholder = 'Redis configuré (' + (data.redis_url_preview || '••••') + ') — Laisser vide pour conserver';
+                        if (redisUrlHint) redisUrlHint.innerHTML = 'Redis actif : <code>' + escapeHtml(data.redis_url_preview) + '</code>';
+                    } else {
+                        redisUrlInput.placeholder = 'redis://host:6379/0';
+                        if (redisUrlHint) redisUrlHint.innerHTML = 'Optionnel : pour le cache d\'invalidation en temps réel.';
+                    }
+                }
             } catch (e) {
                 console.error('Erreur chargement config :', e);
+            }
+        }
+
+        async function handleTestCluster() {
+            const dbUrl = document.getElementById('cfg-db-url') ? document.getElementById('cfg-db-url').value.trim() : '';
+            const redisUrl = document.getElementById('cfg-redis-url') ? document.getElementById('cfg-redis-url').value.trim() : '';
+            const resultBox = document.getElementById('cluster-test-result');
+            const btn = document.getElementById('btn-test-cluster');
+
+            resultBox.style.display = 'none';
+            btn.disabled = true;
+            btn.innerText = '🔌 Test du cluster...';
+
+            const payload = {};
+            if (dbUrl) payload.database_url = dbUrl;
+            if (redisUrl) payload.redis_url = redisUrl;
+
+            try {
+                const res = await fetch(apiBase + '/api/config/test-cluster', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                resultBox.style.display = 'block';
+                if (res.ok && data.success) {
+                    resultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+                    resultBox.style.border = '1px solid #10b981';
+                    resultBox.style.color = '#10b981';
+                    resultBox.innerHTML = '✓ <strong>Succès :</strong> ' + escapeHtml(data.message);
+                } else {
+                    resultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+                    resultBox.style.border = '1px solid #ef4444';
+                    resultBox.style.color = '#ef4444';
+                    resultBox.innerHTML = '✗ <strong>Échec :</strong> ' + escapeHtml(data.message || data.error || 'Impossible de joindre le cluster');
+                }
+            } catch (err) {
+                resultBox.style.display = 'block';
+                resultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+                resultBox.style.border = '1px solid #ef4444';
+                resultBox.style.color = '#ef4444';
+                resultBox.innerHTML = '✗ Erreur réseau : ' + escapeHtml(err.message);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '🔌 Tester Connexion Cluster';
             }
         }
 
@@ -1247,6 +1397,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const prefix = document.getElementById('cfg-api-prefix').value.trim();
             const jwtSecret = document.getElementById('cfg-jwt-secret') ? document.getElementById('cfg-jwt-secret').value.trim() : '';
             const mcpKey = document.getElementById('cfg-mcp-key') ? document.getElementById('cfg-mcp-key').value.trim() : '';
+            const clusterMode = document.getElementById('cfg-cluster-mode') ? document.getElementById('cfg-cluster-mode').checked : false;
+            const dbUrl = document.getElementById('cfg-db-url') ? document.getElementById('cfg-db-url').value.trim() : '';
+            const redisUrl = document.getElementById('cfg-redis-url') ? document.getElementById('cfg-redis-url').value.trim() : '';
+            const statelessHttp = document.getElementById('cfg-stateless-http') ? document.getElementById('cfg-stateless-http').checked : false;
             const alertBox = document.getElementById('config-alert');
             const btn = document.getElementById('btn-save-config');
             alertBox.style.display = 'none';
@@ -1254,12 +1408,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             btn.disabled = true;
             btn.innerText = '💾 Enregistrement...';
 
-            const payload = {};
+            const payload = {
+                cluster_mode: clusterMode,
+                mcp_stateless_http: statelessHttp
+            };
             if (url) payload.melodi_base_url = url;
             if (key) payload.melodi_api_key = key;
             if (prefix !== undefined && prefix !== null) payload.melodi_api_prefix = prefix;
             if (jwtSecret) payload.jwt_secret = jwtSecret;
             if (mcpKey) payload.mcp_api_key = mcpKey;
+            if (dbUrl) payload.database_url = dbUrl;
+            if (redisUrl) payload.redis_url = redisUrl;
 
             try {
                 const res = await fetch(apiBase + '/api/config', {
@@ -1269,9 +1428,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 });
                 const data = await res.json();
                 if (res.ok && data.success) {
-                    showToast('Configuration MELODI mise à jour (' + data.tools_count + ' outils synchronisés)');
-                    alertBox.className = 'alert alert-info';
-                    alertBox.innerText = '✓ ' + (data.message || 'Configuration mise à jour avec succès.');
+                    showToast(data.message || 'Configuration mise à jour');
+                    alertBox.className = data.requires_restart ? 'alert alert-warning' : 'alert alert-info';
+                    alertBox.innerHTML = (data.requires_restart ? '⚠️ ' : '✓ ') + escapeHtml(data.message || 'Configuration mise à jour avec succès.');
                     alertBox.style.display = 'block';
                     fetchStatus();
                     fetchTools();
@@ -1289,7 +1448,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 showToast(err.message, true);
             } finally {
                 btn.disabled = false;
-                btn.innerText = '💾 Enregistrer & Appliquer';
+                btn.innerText = '💾 Enregistrer les Modifications';
             }
         }
 

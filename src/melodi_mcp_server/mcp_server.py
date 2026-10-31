@@ -123,7 +123,7 @@ class MelodiMcpServerApp:
 
     def create_http_app(self, admin_db: Optional[Any] = None) -> Starlette:
         """Crée l'application Web unifiée pour le transport HTTP Streamable / SSE et l'Admin."""
-        mcp_app = self.server.streamable_http_app()
+        mcp_app = self.server.streamable_http_app(stateless_http=self.settings.mcp_stateless_http)
 
         mcp_handler = None
         for r in mcp_app.routes:
@@ -145,10 +145,39 @@ class MelodiMcpServerApp:
 
         routes.append(Route("/health", health_endpoint, methods=["GET"]))
 
-        # Initialisation de la base de données SQLite partagée
+        # Initialisation de la base de données (SQLite par défaut ou PostgreSQL si cluster configuré)
         if admin_db is None:
             from melodi_mcp_server.admin.db import AdminDatabase
-            admin_db = AdminDatabase(self.settings.admin_db_path)
+
+            db_url = (
+                self.settings.database_url.get_secret_value()
+                if self.settings.database_url
+                else None
+            )
+            cluster_active = self.settings.cluster_mode
+
+            # Si non spécifié dans l'environnement, vérifier la configuration persistée localement
+            if not db_url:
+                try:
+                    local_db = AdminDatabase(self.settings.admin_db_path)
+                    saved_cluster = local_db.get_config("cluster_mode")
+                    saved_url = local_db.get_config("database_url")
+                    if saved_cluster == "true" and saved_url:
+                        db_url = saved_url
+                        cluster_active = True
+                except Exception as e:
+                    logger.debug("Vérification config cluster persistée : %s", e)
+
+            if cluster_active and db_url:
+                try:
+                    admin_db = AdminDatabase(database_url=db_url)
+                    logger.info("melodi_mcp_server initialisé en mode CLUSTER (PostgreSQL partagé).")
+                except Exception as e:
+                    logger.error("Impossible de se connecter au cluster PostgreSQL, repli sécurisé sur SQLite : %s", e)
+                    admin_db = AdminDatabase(self.settings.admin_db_path)
+            else:
+                admin_db = AdminDatabase(self.settings.admin_db_path)
+                logger.info("melodi_mcp_server initialisé en mode STANDALONE (SQLite local).")
 
         self._admin_db = admin_db
 
@@ -197,6 +226,24 @@ class MelodiMcpServerApp:
                     self.settings.mcp_api_key = SecretStr(saved_mcp_api_key)
                 except Exception as e:
                     logger.warning("Impossible d'appliquer la clé MCP API persistée : %s", e)
+
+            saved_cluster = admin_db.get_config("cluster_mode")
+            if saved_cluster is not None:
+                self.settings.cluster_mode = (saved_cluster == "true")
+
+            saved_db = admin_db.get_config("database_url")
+            if saved_db:
+                from pydantic import SecretStr
+                self.settings.database_url = SecretStr(saved_db)
+
+            saved_redis = admin_db.get_config("redis_url")
+            if saved_redis:
+                from pydantic import SecretStr
+                self.settings.redis_url = SecretStr(saved_redis)
+
+            saved_stateless = admin_db.get_config("mcp_stateless_http")
+            if saved_stateless is not None:
+                self.settings.mcp_stateless_http = (saved_stateless == "true")
 
             admin_routes = create_admin_routes(
                 self.registry,

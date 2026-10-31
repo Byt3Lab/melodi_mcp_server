@@ -16,8 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-class AdminDatabase:
-    """Gestionnaire de persistance SQLite pour les utilisateurs administrateurs et sessions."""
+class SQLiteStorageBackend:
+    """Gestionnaire de persistance SQLite pour les utilisateurs administrateurs et sessions (mode autonome)."""
 
     def __init__(self, db_path: str = "data/admin.db"):
         self.db_path = db_path
@@ -37,6 +37,14 @@ class AdminDatabase:
                 os.makedirs(dir_name, exist_ok=True)
 
         self.init_db()
+
+    def close(self) -> None:
+        """Ferme la connexion si en mémoire."""
+        if self._mem_conn is not None:
+            try:
+                self._mem_conn.close()
+            except Exception:
+                pass
 
     def _get_connection(self) -> sqlite3.Connection:
         """Crée ou réutilise une connexion SQLite avec support des clés étrangères et factory Row."""
@@ -734,3 +742,161 @@ class AdminDatabase:
             )
             conn.commit()
             return cursor.rowcount
+
+
+class AdminDatabase:
+    """Façade unifiée pour la persistance : SQLite autonome par défaut ou PostgreSQL en cluster."""
+
+    def __init__(self, db_path: str = "data/admin.db", database_url: Optional[str] = None):
+        self.db_path = db_path
+        self.database_url = database_url
+        clean_db_url = str(database_url).strip() if database_url else ""
+
+        if clean_db_url.startswith(("postgresql://", "postgres://")):
+            from ..storage.postgres import PostgresStorageBackend
+            logger.info("AdminDatabase : activation du backend PostgreSQL partagé (mode cluster).")
+            self._backend = PostgresStorageBackend(clean_db_url)
+        else:
+            self._backend = SQLiteStorageBackend(db_path)
+
+    @property
+    def is_cluster(self) -> bool:
+        """Retourne True si le stockage actif est PostgreSQL (cluster), False si SQLite."""
+        return not isinstance(self._backend, SQLiteStorageBackend)
+
+    @property
+    def _revoked_tokens_cache(self) -> set[str]:
+        return getattr(self._backend, "_revoked_tokens_cache", set())
+
+    @_revoked_tokens_cache.setter
+    def _revoked_tokens_cache(self, value: set[str]) -> None:
+        if hasattr(self._backend, "_revoked_tokens_cache"):
+            self._backend._revoked_tokens_cache = value
+
+    @staticmethod
+    def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+        return SQLiteStorageBackend.hash_password(password, salt)
+
+    @staticmethod
+    def verify_password(password: str, password_hash: str, salt: str) -> bool:
+        return SQLiteStorageBackend.verify_password(password, password_hash, salt)
+
+    def init_db(self) -> None:
+        return self._backend.init_db()
+
+    def has_users(self) -> bool:
+        return self._backend.has_users()
+
+    def count_active_admins(self) -> int:
+        return self._backend.count_active_admins()
+
+    def setup_first_admin(self, username: str, password: str) -> Dict[str, Any]:
+        return self._backend.setup_first_admin(username, password)
+
+    def authenticate(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+        return self._backend.authenticate(username, password)
+
+    def create_session(self, user_id: int, ttl_hours: int = 24) -> str:
+        return self._backend.create_session(user_id, ttl_hours)
+
+    def get_user_by_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        return self._backend.get_user_by_session(session_id)
+
+    def delete_session(self, session_id: str) -> bool:
+        return self._backend.delete_session(session_id)
+
+    def cleanup_expired_sessions(self) -> int:
+        return self._backend.cleanup_expired_sessions()
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        return self._backend.list_users()
+
+    def create_user(self, username: str, password: str, role: str = "admin") -> Dict[str, Any]:
+        return self._backend.create_user(username, password, role)
+
+    def update_password(self, user_id: int, new_password: str) -> bool:
+        return self._backend.update_password(user_id, new_password)
+
+    def toggle_user_status(self, user_id: int, current_user_id: Optional[int] = None) -> bool:
+        return self._backend.toggle_user_status(user_id, current_user_id)
+
+    def delete_user(self, user_id: int, current_user_id: Optional[int] = None) -> bool:
+        return self._backend.delete_user(user_id, current_user_id)
+
+    def get_config(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        return self._backend.get_config(key, default)
+
+    def set_config(self, key: str, value: str) -> None:
+        return self._backend.set_config(key, value)
+
+    def get_all_configs(self) -> Dict[str, str]:
+        return self._backend.get_all_configs()
+
+    def revoke_token(
+        self,
+        token_id: str,
+        user_id: Optional[str] = None,
+        expires_at: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        return self._backend.revoke_token(token_id, user_id, expires_at, reason)
+
+    def is_token_revoked(self, token_id: str) -> bool:
+        return self._backend.is_token_revoked(token_id)
+
+    def list_revoked_tokens(self, limit: int = 100) -> List[Dict[str, Any]]:
+        return self._backend.list_revoked_tokens(limit)
+
+    def delete_revoked_token(self, token_id: str) -> bool:
+        return self._backend.delete_revoked_token(token_id)
+
+    def cleanup_expired_revoked_tokens(self, max_age_hours: int = 72) -> int:
+        return self._backend.cleanup_expired_revoked_tokens(max_age_hours)
+
+    def create_oauth_code(
+        self,
+        client_id: str,
+        redirect_uri: str,
+        jwt_token: str,
+        token_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        code_challenge: Optional[str] = None,
+        code_challenge_method: Optional[str] = None,
+        ttl_seconds: int = 300,
+    ) -> str:
+        return self._backend.create_oauth_code(
+            client_id, redirect_uri, jwt_token, token_id, user_id,
+            code_challenge, code_challenge_method, ttl_seconds
+        )
+
+    def consume_oauth_code(
+        self,
+        code: str,
+        client_id: str,
+        redirect_uri: Optional[str] = None,
+        code_verifier: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        return self._backend.consume_oauth_code(code, client_id, redirect_uri, code_verifier)
+
+    def register_oauth_client(
+        self,
+        client_name: str,
+        redirect_uris: List[str],
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self._backend.register_oauth_client(client_name, redirect_uris, client_id, client_secret)
+
+    def get_oauth_client(self, client_id: str) -> Optional[Dict[str, Any]]:
+        return self._backend.get_oauth_client(client_id)
+
+    def cleanup_expired_oauth_codes(self) -> int:
+        return self._backend.cleanup_expired_oauth_codes()
+
+    def close(self) -> None:
+        if hasattr(self._backend, "close"):
+            self._backend.close()
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._backend, item)
+

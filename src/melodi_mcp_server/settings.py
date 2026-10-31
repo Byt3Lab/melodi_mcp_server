@@ -17,6 +17,25 @@ def normalize_url_path(path: str) -> str:
     return cleaned
 
 
+def mask_connection_url(url: Optional[str]) -> str:
+    """Masque le mot de passe dans une URL de base de données ou de cache pour affichage sécurisé."""
+    if not url:
+        return ""
+    import urllib.parse
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.password:
+            # Remplacement sécurisé du mot de passe par des étoiles
+            user = parsed.username or ""
+            host = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            netloc = f"{user}:••••••••@{host}{port}"
+            return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    except Exception:
+        pass
+    return "••••••••"
+
+
 class Settings(BaseSettings):
     """Paramètres applicatifs validés au démarrage."""
 
@@ -98,6 +117,24 @@ class Settings(BaseSettings):
         description="Durée de validité d'une session administrateur en heures",
     )
 
+    # --- Scalabilité & Haute Disponibilité (Cluster) ---
+    cluster_mode: bool = Field(
+        default=False,
+        description="Activer le mode cluster distribué (PostgreSQL partagé)",
+    )
+    database_url: Optional[SecretStr] = Field(
+        default=None,
+        description="URL de connexion PostgreSQL pour le cluster (ex: postgresql://user:pass@host:5432/db)",
+    )
+    redis_url: Optional[SecretStr] = Field(
+        default=None,
+        description="URL de connexion Redis pour le cache distribué et pub/sub (ex: redis://host:6379/0)",
+    )
+    mcp_stateless_http: bool = Field(
+        default=False,
+        description="Activer le mode MCP Stateless HTTP (évite la dépendance à l'affinité de session)",
+    )
+
     # --- Catalogue & Exécution ---
     catalog_sync_interval_seconds: int = Field(
         default=60,
@@ -139,7 +176,9 @@ class Settings(BaseSettings):
     def validate_admin_prefix(cls, v: str) -> str:
         return normalize_url_path(v)
 
-    @field_validator("admin_api_key", "mcp_api_key", "jwt_secret", mode="before")
+    @field_validator(
+        "admin_api_key", "mcp_api_key", "jwt_secret", "database_url", "redis_url", mode="before"
+    )
     @classmethod
     def validate_optional_secrets(cls, v: Any) -> Any:
         if v == "" or (isinstance(v, SecretStr) and not v.get_secret_value()):

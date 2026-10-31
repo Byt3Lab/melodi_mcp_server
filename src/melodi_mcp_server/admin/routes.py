@@ -333,6 +333,16 @@ def create_admin_routes(
             raw_m = settings.mcp_api_key.get_secret_value()
             mcp_api_key_preview = raw_m[:4] + "••••" + raw_m[-4:] if len(raw_m) > 8 else "••••••••"
 
+        from ..settings import mask_connection_url
+
+        has_db_url = bool(settings.database_url and settings.database_url.get_secret_value())
+        db_url_preview = mask_connection_url(settings.database_url.get_secret_value()) if has_db_url else ""
+
+        has_redis = bool(settings.redis_url and settings.redis_url.get_secret_value())
+        redis_url_preview = mask_connection_url(settings.redis_url.get_secret_value()) if has_redis else ""
+
+        is_running_cluster = getattr(database, "is_cluster", False)
+
         return JSONResponse({
             "success": True,
             "melodi_base_url": settings.melodi_base_url,
@@ -345,6 +355,13 @@ def create_admin_routes(
             "mcp_api_key_preview": mcp_api_key_preview,
             "catalog_sync_interval_seconds": settings.catalog_sync_interval_seconds,
             "user_role": current_user.get("role"),
+            "cluster_mode": getattr(settings, "cluster_mode", False),
+            "is_running_cluster": is_running_cluster,
+            "has_database_url": has_db_url,
+            "database_url_preview": db_url_preview,
+            "has_redis_url": has_redis,
+            "redis_url_preview": redis_url_preview,
+            "mcp_stateless_http": getattr(settings, "mcp_stateless_http", False),
         })
 
     async def test_config_api(request: Request) -> JSONResponse:
@@ -409,6 +426,28 @@ def create_admin_routes(
                 "error": f"Impossible de joindre {raw_url}{clean_prefix} : {e}",
             }, status_code=400)
 
+    async def test_cluster_config_api(request: Request) -> JSONResponse:
+        """Teste la connectivité PostgreSQL et Redis pour la scalabilité cluster sans modifier la configuration active."""
+        current_user = _get_current_user(request)
+        if not current_user:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        if current_user.get("role") != "admin":
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+        body = await _parse_body(request)
+        test_db_url = (body.get("database_url") or "").strip()
+        if not test_db_url and settings.database_url:
+            test_db_url = settings.database_url.get_secret_value()
+
+        test_redis_url = (body.get("redis_url") or "").strip()
+        if not test_redis_url and settings.redis_url:
+            test_redis_url = settings.redis_url.get_secret_value()
+
+        from ..storage.tester import test_cluster_connections
+        test_result = test_cluster_connections(test_db_url, test_redis_url)
+        status_code = 200 if test_result["success"] else 400
+        return JSONResponse(test_result, status_code=status_code)
+
     async def update_config_api(request: Request) -> JSONResponse:
         """Met à jour l'URL, le préfixe, la clé API MELODI, le secret JWT et/ou la clé MCP à chaud et persiste dans SQLite."""
         current_user = _get_current_user(request)
@@ -468,18 +507,68 @@ def create_admin_routes(
                     database.set_config("mcp_api_key", clean_mcp)
                     updated_items.append("Clé MCP API")
 
+            # 6. Mise à jour des paramètres de scalabilité (Cluster & Haute Disponibilité)
+            requires_restart = False
+            raw_cluster_mode = body.get("cluster_mode")
+            if raw_cluster_mode is not None:
+                new_mode = str(raw_cluster_mode).lower() in ("true", "1", "yes")
+                settings.cluster_mode = new_mode
+                database.set_config("cluster_mode", "true" if new_mode else "false")
+                updated_items.append(f"Mode Cluster ({'Activé' if new_mode else 'Désactivé'})")
+                requires_restart = True
+
+            raw_db_url = body.get("database_url")
+            if raw_db_url is not None:
+                clean_db = str(raw_db_url).strip()
+                if clean_db:
+                    from pydantic import SecretStr
+                    settings.database_url = SecretStr(clean_db)
+                    database.set_config("database_url", clean_db)
+                    updated_items.append("URL Base de données PostgreSQL")
+                    requires_restart = True
+                elif clean_db == "":
+                    settings.database_url = None
+                    database.set_config("database_url", "")
+                    updated_items.append("URL Base de données réinitialisée")
+                    requires_restart = True
+
+            raw_redis_url = body.get("redis_url")
+            if raw_redis_url is not None:
+                clean_redis = str(raw_redis_url).strip()
+                if clean_redis:
+                    from pydantic import SecretStr
+                    settings.redis_url = SecretStr(clean_redis)
+                    database.set_config("redis_url", clean_redis)
+                    updated_items.append("URL Redis")
+                    requires_restart = True
+                elif clean_redis == "":
+                    settings.redis_url = None
+                    database.set_config("redis_url", "")
+                    updated_items.append("URL Redis réinitialisée")
+                    requires_restart = True
+
+            raw_stateless = body.get("mcp_stateless_http")
+            if raw_stateless is not None:
+                new_stateless = str(raw_stateless).lower() in ("true", "1", "yes")
+                settings.mcp_stateless_http = new_stateless
+                database.set_config("mcp_stateless_http", "true" if new_stateless else "false")
+                updated_items.append(f"Mode Stateless HTTP ({'Activé' if new_stateless else 'Désactivé'})")
+                requires_restart = True
+
             if not updated_items:
                 return JSONResponse(
                     {"success": False, "error": "Aucune modification demandée."},
                     status_code=400,
                 )
 
-            # 4. Synchronisation immédiate avec l'instance MELODI
-            try:
-                count = await registry.sync_now(force=True)
-            except Exception as sync_err:
-                logger.warning("Synchronisation immédiate post-configuration échouée : %s", sync_err)
-                count = len(registry.list_mcp_tools())
+            # 7. Synchronisation immédiate avec l'instance MELODI (si paramètres ERP modifiés)
+            erp_modified = any(k in updated_items for k in ("URL", "Clé API MELODI", "Préfixe API"))
+            count = len(registry.list_mcp_tools())
+            if erp_modified:
+                try:
+                    count = await registry.sync_now(force=True)
+                except Exception as sync_err:
+                    logger.warning("Synchronisation immédiate post-configuration échouée : %s", sync_err)
 
             health_data = await health_checker.check()
 
@@ -490,14 +579,24 @@ def create_admin_routes(
             else:
                 items_str = f"{', '.join(updated_items[:-1])} et {updated_items[-1]}"
 
+            restart_msg = (
+                " ⚠️ Les modifications de scalabilité ont été enregistrées. "
+                "Veuillez redémarrer melodi_mcp_server pour appliquer la bascule."
+                if requires_restart
+                else ""
+            )
+
             return JSONResponse({
                 "success": True,
                 "melodi_base_url": settings.melodi_base_url,
                 "melodi_api_prefix": settings.melodi_api_prefix,
                 "has_melodi_api_key": bool(settings.melodi_api_key and settings.melodi_api_key.get_secret_value()),
+                "cluster_mode": settings.cluster_mode,
+                "mcp_stateless_http": settings.mcp_stateless_http,
+                "requires_restart": requires_restart,
                 "tools_count": count,
                 "health": health_data,
-                "message": f"{items_str} de MELODI ERP mise(s) à jour avec succès.",
+                "message": f"Paramètres ({items_str}) mis à jour avec succès.{restart_msg}",
             })
         except Exception as e:
             logger.error("Erreur lors de la mise à jour des paramètres MELODI : %s", e)
@@ -602,6 +701,7 @@ def create_admin_routes(
         Route(f"{prefix}/api/config", get_config_api, methods=["GET"]),
         Route(f"{prefix}/api/config", update_config_api, methods=["POST"]),
         Route(f"{prefix}/api/config/test", test_config_api, methods=["POST"]),
+        Route(f"{prefix}/api/config/test-cluster", test_cluster_config_api, methods=["POST"]),
         # CRUD Utilisateurs
         Route(f"{prefix}/api/users", list_users_api, methods=["GET"]),
         Route(f"{prefix}/api/users", create_user_api, methods=["POST"]),
